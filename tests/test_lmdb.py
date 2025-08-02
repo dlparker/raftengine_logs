@@ -46,4 +46,6 @@ async def test_lmdb_specific():
     await log.start()
     stats = await log.get_stats()
     assert stats.percent_remaining is not None
+    from pprint import pprint
+    pprint(stats)
     
