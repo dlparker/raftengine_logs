@@ -109,7 +109,7 @@ class MemoryLog(LogAPI):
         pass
 
     async def stop(self):
-        pass
+        await self.close()
 
     async def get_broken(self) -> bool:
         return self.broken

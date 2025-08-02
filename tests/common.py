@@ -7,32 +7,14 @@ from pathlib import Path
 import pytest
 
 from raftengine.api.log_api import LogRec
-from memory.memory_log import MemoryLog
-from sqlite.sqlite_log import SqliteLog
-from lmdb1.lmdb_log import LmdbLog
 
-async def inner_log_testfunc(log_type=MemoryLog):
+async def inner_log_test_basic(log_create, log_close_and_reopen):
     temp_dir = None  # Track temporary directory for cleanup
     log = None
     new_log = None
     
     try:
-        if log_type == MemoryLog:
-            log = MemoryLog()
-        elif log_type == SqliteLog:
-            path = Path('/tmp', "test_log.sqlite")
-            if path.exists():
-                path.unlink()
-            log = SqliteLog(path)
-        elif log_type == LmdbLog:
-            path = Path('/tmp', "test_log.lmdb")
-            if path.exists():
-                import shutil
-                shutil.rmtree(path)
-            log = LmdbLog(path)
-        else:
-            raise Exception(f'unknown log type {log_type}')
-            
+        log = await log_create()
         await log.start()
 
         assert await log.get_last_index() == 0
@@ -101,28 +83,19 @@ async def inner_log_testfunc(log_type=MemoryLog):
         with pytest.raises(Exception):
             await log.replace(bad_rec)
                 
-        if log_type in [SqliteLog, LmdbLog]:
-            # memory log can't do this.
-            await log.stop()
-            
-            if log_type == SqliteLog:
-                path = Path('/tmp', "test_log.sqlite")
-                new_log = SqliteLog(path)
-            elif log_type == LmdbLog:
-                path = Path('/tmp', "test_log.lmdb")
-                new_log = LmdbLog(path)
-            await new_log.start()
-            loc_c = await new_log.get_commit_index()
-            assert loc_c == 2
-            rec = await new_log.read(2)
-            assert rec.index == 2
-            assert rec.command == "add 2"
-            assert await new_log.get_last_index() == 3
-            assert await new_log.get_term() == 5
-            assert await new_log.get_applied_index() == 1
-            assert await new_log.get_commit_index() == 2
-            log = new_log
-            new_log = None  # Transfer ownership
+        new_log = await log_close_and_reopen(log)
+        await new_log.start()
+        loc_c = await new_log.get_commit_index()
+        assert loc_c == 2
+        rec = await new_log.read(2)
+        assert rec.index == 2
+        assert rec.command == "add 2"
+        assert await new_log.get_last_index() == 3
+        assert await new_log.get_term() == 5
+        assert await new_log.get_applied_index() == 1
+        assert await new_log.get_commit_index() == 2
+        log = new_log
+        new_log = None  # Transfer ownership
 
         import os
         if 'RAFTLOG_PERF_TEST' in os.environ:
