@@ -1,0 +1,2 @@
+git+https://github.com/dlparker/raftengine.git@v0.1.0#egg=raftengine
+lmdb>=1.7.3
