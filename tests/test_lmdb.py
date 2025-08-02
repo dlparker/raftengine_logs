@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from raftengine.api.log_api import LogRec
-from lmdb1.lmdb_log import LmdbLog
+from lmdb_log.lmdb_log import LmdbLog
 from common import (inner_log_test_basic, inner_log_perf_run,
                     inner_log_test_deletes, inner_log_test_snapshots,
                     inner_log_test_configs
