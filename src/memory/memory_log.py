@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 class MemoryLog(LogAPI):
     
     def __init__(self):
-        self.first_index = 0
+        self.first_index = None
         self.last_index = 0
         self.last_term = 0
         self.term = 0
@@ -27,13 +27,14 @@ class MemoryLog(LogAPI):
         self.broken = False
         self.max_commit = 0
         self.max_apply = 0
+        self.max_timestamps = 1000
         
         # Statistics tracking
         self.record_timestamps = []  # Track timestamps for rate calculation
         self.last_record_time = None
 
     async def close(self):
-        self.first_index = 0
+        self.first_index = None
         self.last_index = 0
         self.last_term = 0
         self.term = 0
@@ -73,8 +74,8 @@ class MemoryLog(LogAPI):
         self.record_timestamps.append(current_time)
         
         # Keep only last 1000 timestamps for rate calculation (prevent memory growth)
-        if len(self.record_timestamps) > 1000:
-            self.record_timestamps = self.record_timestamps[-1000:]
+        if len(self.record_timestamps) > self.max_timestamps:
+            self.record_timestamps = self.record_timestamps[-self.max_timestamps:]
             
         return rec
             
@@ -94,13 +95,10 @@ class MemoryLog(LogAPI):
                 if rindex <= index:
                     del self.entries[rindex]
         if len(self.entries) == 0:
+            # this should only be called from install snapshot, so there should be one
             self.first_index = None
-            if self.snapshot:
-                self.last_index = self.snapshot.index
-                self.last_term = self.snapshot.term
-            else:
-                self.last_index = 0
-                self.last_term = 0
+            self.last_index = self.snapshot.index
+            self.last_term = self.snapshot.term
         else:
             self.first_index = index + 1
 
@@ -195,9 +193,10 @@ class MemoryLog(LogAPI):
         return LogRec(**rec.__dict__)
     
     async def delete_all_from(self, index: int):
-        if index == 0:
+        if index == 0 or self.snapshot and index == self.snapshot.index + 1:
             self.entries = {}
             self.first_entry = 0
+            self.first_index = None
             if self.snapshot:
                 self.last_index = self.snapshot.index
                 self.last_term = self.snapshot.term
@@ -212,9 +211,6 @@ class MemoryLog(LogAPI):
                     del self.entries[rindex]
             keys = list(self.entries.keys())
             keys.sort()
-            if len(keys) == 0:
-                self.first_index = self.last_index = self.term = 0
-                return
             self.first_index = keys[0]
             self.last_index = keys[-1]
             rec = self.entries[self.last_index]

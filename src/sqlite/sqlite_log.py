@@ -67,10 +67,10 @@ class Records:
         cursor.execute(sql)
         row = cursor.fetchone()
         if row:
-           self.snapshot = SnapShot(index=row['index'], term=row['term'])
+           self.snapshot = SnapShot(index=row['s_index'], term=row['term'])
         
     def close(self) -> None:
-        if self.db is None:  # pragma: no cover
+        if self.db is None:  
             return  # pragma: no cover
         self.db.close()
         self.db = None
@@ -87,14 +87,6 @@ class Records:
         schema += "timestamp REAL)"
         cursor.execute(schema)
         
-        # Add timestamp column if it doesn't exist (for existing databases)
-        try:
-            cursor.execute("ALTER TABLE records ADD COLUMN timestamp REAL")
-            self.db.commit()
-        except sqlite3.OperationalError:
-            # Column already exists
-            pass
-
         schema = f"CREATE TABLE if not exists stats " \
             "(dummy INTERGER primary key, max_index INTEGER,"\
             " term INTEGER, " \
@@ -131,7 +123,7 @@ class Records:
         cursor.close()
                      
     def save_entry(self, entry):
-        if self.db is None: # pragma: no cover
+        if self.db is None: 
             self.open() # pragma: no cover
         cursor = self.db.cursor()
         params = []
@@ -163,10 +155,6 @@ class Records:
         entry.index = cursor.lastrowid
         if entry.index > self.max_index:
             self.max_index = entry.index
-        if entry.index > self.max_commit and entry.committed:
-            self.max_commit = entry.index
-        if entry.index > self.max_apply and entry.applied:
-            self.max_apply = entry.index
         sql = "replace into stats (dummy, max_index, term, voted_for, broken, max_commit, max_apply) values (?,?,?,?,?,?,?)"
         cursor.execute(sql, [1, self.max_index, self.term, self.voted_for, self.broken, self.max_commit, self.max_apply])
         self.db.commit()
@@ -174,7 +162,7 @@ class Records:
         return self.read_entry(entry.index)
 
     def read_entry(self, index=None):
-        if self.db is None: # pragma: no cover
+        if self.db is None: 
             self.open() # pragma: no cover
         cursor = self.db.cursor()
         if index == None:
@@ -253,16 +241,6 @@ class Records:
         rec = self.save_entry(rec)
         return rec
 
-    def get_commit_index(self):
-        if self.db is None: # pragma: no cover
-            self.open() # pragma: no cover
-        return self.commit_index
-
-    def get_applied_index(self):
-        if self.db is None: # pragma: no cover
-            self.open() # pragma: no cover
-        return self.apply_index
-
     def set_commit_index(self, index):
         if self.db is None: # pragma: no cover
             self.open() # pragma: no cover
@@ -282,7 +260,7 @@ class Records:
             self.open() # pragma: no cover
         cursor = self.db.cursor()
         cursor.execute("delete from records where rec_index >= ?", [index,])
-        self.max_index = index - 1
+        self.max_index = index - 1 if index > 0 else 0
         # If we are deleting committed records that violates raft rules,
         # but this is not the place to enforce that
         self.max_commit = min(self.max_index, self.max_commit)
@@ -343,12 +321,12 @@ class Records:
     def get_first_index(self):
         if self.db is None: # pragma: no cover
             self.open() # pragma: no cover
-        if not self.snapshot:
-            if self.max_index > 0:
-                return 1
+        if self.snapshot:
+            if self.max_index > self.snapshot.index:
+                return self.snapshot.index + 1
             return None
-        if self.max_index > self.snapshot.index:
-            return self.snapshot.index + 1
+        if self.max_index > 0:
+            return 1
         return None
 
     def get_last_index(self):
@@ -370,8 +348,7 @@ class Records:
         cursor.execute(sql, [snapshot.index,])
         cursor.close()
         self.db.commit()
-        if self.max_index < snapshot.index:
-            self.max_index = snapshot.index
+        self.max_index = max(snapshot.index, self.max_index)
         self.snapshot = snapshot
 
     def get_snapshot(self):
@@ -498,7 +475,7 @@ class SqliteLog(LogAPI):
 
     async def get_stats(self) -> LogStats:
         """Get statistics for SqliteLog."""
-        if not self.records.is_open():
+        if not self.records.is_open(): # pragma: no cover
             self.records.open()
         
         cursor = self.records.db.cursor()
@@ -531,11 +508,7 @@ class SqliteLog(LogAPI):
         last_timestamp_result = cursor.fetchone()[0]
         last_record_timestamp = last_timestamp_result if last_timestamp_result else None
         
-        # Calculate database file size
-        try:
-            total_size_bytes = os.path.getsize(self.records.filepath)
-        except OSError:
-            total_size_bytes = 0
+        total_size_bytes = os.path.getsize(self.records.filepath)
         
         cursor.close()
         

@@ -125,7 +125,7 @@ class Records:
     def save_entry(self, entry: LogRec) -> LogRec:
         """Save a log entry and update related state."""
         if self.env is None:
-            self.open()
+            self.open() # pragma: no cover
             
         with self.env.begin(write=True) as txn:
             # Handle index assignment like SQLite implementation
@@ -152,11 +152,6 @@ class Records:
             # Update tracking state
             if entry.index > self.max_index:
                 self.max_index = entry.index
-            if entry.index > self.max_commit and entry.committed:
-                self.max_commit = entry.index
-            if entry.index > self.max_apply and entry.applied:
-                self.max_apply = entry.index
-                
             self._save_stats(txn)
             
         return self.read_entry(entry.index)
@@ -164,7 +159,7 @@ class Records:
     def read_entry(self, index: Optional[int] = None) -> Optional[LogRec]:
         """Read a log entry by index."""
         if self.env is None:
-            self.open()
+            self.open() # pragma: no cover
             
         with self.env.begin() as txn:
             if index is None:
@@ -182,35 +177,28 @@ class Records:
                 return None
                 
             rec = self._deserialize_rec(data)
-            
-            # Set committed/applied flags based on current state
-            if self.max_commit >= rec.index:
-                rec.committed = True
-            if self.max_apply >= rec.index:
-                rec.applied = True
-                
             return rec
 
     def get_broken(self):
         if self.env is None:
-            self.open()
+            self.open() # pragma: no cover
         return self.broken
 
     def set_broken(self):
         if self.env is None:
-            self.open()
+            self.open() # pragma: no cover
         self.broken = True
         self.save_stats()
 
     def set_fixed(self):
         if self.env is None:
-            self.open()
+            self.open() # pragma: no cover
         self.broken = False
         self.save_stats()
 
     def save_stats(self):
         if self.env is None:
-            self.open()
+            self.open() # pragma: no cover
         with self.env.begin(write=True) as txn:
             self._save_stats(txn)
 
@@ -220,7 +208,7 @@ class Records:
 
     def set_voted_for(self, value):
         if self.env is None:
-            self.open()
+            self.open() # pragma: no cover
         self.voted_for = value
         self.save_stats()
 
@@ -241,26 +229,16 @@ class Records:
         rec = self.save_entry(rec)
         return rec
 
-    def get_commit_index(self):
-        if self.env is None:
-            self.open()
-        return self.max_commit
-
-    def get_applied_index(self):
-        if self.env is None:
-            self.open()
-        return self.max_apply
-
     def set_commit_index(self, index):
         if self.env is None:
-            self.open()
+            self.open() # pragma: no cover
         if index > self.max_commit:
             self.max_commit = index
             self.save_stats()
 
     def set_apply_index(self, index):
         if self.env is None:
-            self.open()
+            self.open() # pragma: no cover
         if index > self.max_apply:
             self.max_apply = index
             self.save_stats()
@@ -268,7 +246,7 @@ class Records:
     def delete_all_from(self, index: int):
         """Delete all entries from specified index onwards."""
         if self.env is None:
-            self.open()
+            self.open() # pragma: no cover
             
         with self.env.begin(write=True) as txn:
             cursor = txn.cursor(db=self.records_db)
@@ -277,33 +255,23 @@ class Records:
             # Position cursor at first entry >= index
             if cursor.set_range(start_key):
                 # Delete all entries from this position forward
-                while True:
-                    if not cursor.delete():
-                        break
-                    if not cursor.next():
-                        break
+                while cursor.delete():
+                    pass  # delete() auto-advances on succes
             
-            # Update state
-            self.max_index = index - 1
-            # If we are deleting committed records that violates raft rules,
-            # but this is not the place to enforce that
-            self.max_commit = min(self.max_index, self.max_commit)  
-            self.max_apply = min(self.max_index, self.max_apply)
-            
+            self.max_index =  index - 1 if index > 0 else 0
             self._save_stats(txn)
 
     def save_cluster_config(self, config: ClusterConfig) -> None:
         """Save cluster configuration to database."""
         if self.env is None:
-            self.open()
+            self.open() # pragma: no cover
             
         with self.env.begin(write=True) as txn:
             # Clear existing nodes
             cursor = txn.cursor(db=self.nodes_db)
             cursor.first()
             while cursor.delete():
-                if not cursor.next():
-                    break
+                pass # pragma: no cover   should only ever be one
             
             # Save all nodes
             for node in config.nodes.values():
@@ -332,7 +300,7 @@ class Records:
     def get_cluster_config(self) -> Optional[ClusterConfig]:
         """Retrieve cluster configuration from database."""
         if self.env is None:
-            self.open()
+            self.open() # pragma: no cover
             
         with self.env.begin() as txn:
             # Load settings
@@ -370,21 +338,20 @@ class Records:
     def get_first_index(self):
         """Get the index of the first log entry."""
         if self.env is None:
-            self.open()
-            
-        if not self.snapshot:
-            if self.max_index > 0:
-                return 1
+            self.open() # pragma: no cover
+
+        if self.snapshot:
+            if self.max_index > self.snapshot.index:
+                return self.snapshot.index + 1
             return None
-            
-        if self.max_index > self.snapshot.index:
-            return self.snapshot.index + 1
+        if self.max_index > 0:
+            return 1
         return None
 
     def get_last_index(self):
         """Get the index of the last log entry."""
         if self.env is None:
-            self.open()
+            self.open() # pragma: no cover
             
         if not self.snapshot:
             return self.max_index
@@ -393,15 +360,14 @@ class Records:
     async def install_snapshot(self, snapshot: SnapShot):
         """Install snapshot and prune old log entries."""
         if self.env is None:
-            self.open()
+            self.open() # pragma: no cover
             
         with self.env.begin(write=True) as txn:
             # Delete snapshot data first
             cursor = txn.cursor(db=self.snapshots_db) 
             cursor.first()
             while cursor.delete():
-                if not cursor.next():
-                    break
+                pass
             
             # Save new snapshot
             snapshot_data = {'index': snapshot.index, 'term': snapshot.term}
@@ -413,15 +379,12 @@ class Records:
             while cursor.key():
                 key_index = int.from_bytes(cursor.key(), 'big')
                 if key_index <= snapshot.index:
-                    cursor.delete()
-                    if not cursor.next():
-                        break
+                    has_next = cursor.delete()
                 else:
                     break
             
             # Update state
-            if self.max_index < snapshot.index:
-                self.max_index = snapshot.index
+            self.max_index = max(snapshot.index, self.max_index)
             self.snapshot = snapshot
             
             self._save_stats(txn)
@@ -429,7 +392,7 @@ class Records:
     def get_snapshot(self):
         """Get current snapshot."""
         if self.env is None:
-            self.open()
+            self.open() # pragma: no cover
         return self.snapshot
 
 
@@ -465,7 +428,7 @@ class LmdbLog(LogAPI):
 
     async def get_term(self) -> Union[int, None]:
         if not self.records.is_open():
-            self.records.open()
+            self.records.open() # pragma: no cover
         return self.records.term
 
     async def set_term(self, value: int):
@@ -510,7 +473,13 @@ class LmdbLog(LogAPI):
         rec = self.records.get_entry_at(index)
         if rec is None:
             return None
-        return LogRec.from_dict(rec.__dict__)
+
+        log_rec = LogRec.from_dict(rec.__dict__)
+        if log_rec.index <= self.records.max_commit:
+            log_rec.committed = True
+        if log_rec.index <= self.records.max_apply:
+            log_rec.applied = True
+        return log_rec
 
     async def get_last_index(self):
         return self.records.get_last_index()
@@ -557,13 +526,13 @@ class LmdbLog(LogAPI):
     async def get_stats(self) -> LogStats:
         """Get statistics for LmdbLog with percent_remaining calculation."""
         if not self.records.is_open():
-            self.records.open()
+            self.records.open()  # pragma: no cover
         
         with self.records.env.begin() as txn:
             # Get record count
             cursor = txn.cursor(db=self.records.records_db)
             record_count = sum(1 for _ in cursor)
-            
+
             # Calculate records since snapshot
             snapshot_index = self.records.snapshot.index if self.records.snapshot else 0
             records_since_snapshot = max(0, self.records.max_index - snapshot_index)
@@ -577,12 +546,9 @@ class LmdbLog(LogAPI):
             recent_timestamps = []
             cursor = txn.cursor(db=self.records.timestamps_db)
             for key, value in cursor:
-                try:
-                    timestamp = float(value.decode('utf-8'))
-                    if timestamp >= five_minutes_ago:
-                        recent_timestamps.append(timestamp)
-                except (ValueError, UnicodeDecodeError):
-                    continue
+                timestamp = float(value.decode('utf-8'))
+                if timestamp >= five_minutes_ago:
+                    recent_timestamps.append(timestamp)
             
             # Calculate rate from recent timestamps
             if len(recent_timestamps) >= 2:
@@ -595,14 +561,6 @@ class LmdbLog(LogAPI):
             last_record_timestamp = None
             if recent_timestamps:
                 last_record_timestamp = max(recent_timestamps)
-            else:
-                # Try to get any timestamp
-                cursor = txn.cursor(db=self.records.timestamps_db)
-                if cursor.last():
-                    try:
-                        last_record_timestamp = float(cursor.value().decode('utf-8'))
-                    except (ValueError, UnicodeDecodeError):
-                        pass
             
             # Calculate LMDB memory usage and percent remaining
             info = self.records.env.info()
