@@ -30,7 +30,7 @@ class PushBlock:
     apply_index: int
     pushtime: float
     
-class CombiLog(LogAPI):
+class HybridLog(LogAPI):
     
     def __init__(self, dirpath, high_limit=5000, low_limit=100):
         self.dirpath = dirpath 
@@ -151,7 +151,14 @@ class CombiLog(LogAPI):
     
     async def install_snapshot(self, snapshot:SnapShot):
         await self.sqlite_log.install_snapshot(snapshot)
-        return await self.lmdb_log.install_snapshot(snapshot)
+        lm_snap = await self.lmdb_log.get_snapshot()
+        if lm_snap and lm_snap.index > snapshot.index:
+            # sqlite write snapshot already cleared records
+            # past the end of the new "real" snapshot,
+            # so lmdb does not change
+            return
+        await self.lmdb_log.install_snapshot(snapshot)
+        return snapshot
             
     async def get_snapshot(self):
         # always get it from sqlite, that way we can use
@@ -187,11 +194,12 @@ class CombiLog(LogAPI):
         offset = end_index - self.pending_writes[0] + 1  # +1 to include end_index
         self.pending_writes = self.pending_writes[offset:]
         
-        
     async def handle_replies(self):
         while self.running:
             try:
                 res = await asyncio.to_thread(self.sqlwriter.reply_queue.get_nowait)
+                if not self.running:
+                    return
                 if res['error'] is not None:
                     raise Exception(f'Queue returned error {res["error"]}')
                 result = res['result']
@@ -210,7 +218,7 @@ class CombiLog(LogAPI):
                 while self.pending_writes and self.pending_writes[0] <= block.end_index:
                     self.pending_writes.pop(0)
             except queue.Empty:
-                await asyncio.sleep(0.0001)  # Poll interval; tune as needed (e.g., 0.05 for less CPU)
+                await asyncio.sleep(0.01)  # Poll interval; tune as needed (e.g., 0.05 for less CPU)
             except Exception as e:
                 traceback.print_exc()
                 logger.error(f"Error processing reply: {e}")
@@ -267,8 +275,10 @@ class BatchWriter:
             max_index = await self.sqlite.get_last_index()
             max_term = await self.sqlite.get_last_term()
             await self.sqlite.set_term(max_term)
+            #print(f"Block.commit_index = {block.commit_index}")
             await self.sqlite.mark_committed(min(max_index, block.commit_index))
             await self.sqlite.mark_applied(min(max_index, block.apply_index))
+            #print(f"local.commit_index = {await self.sqlite.get_commit_index()}")
             snapshot = SnapShot(max_index, max_term)
             return snapshot
         except Exception as e:
