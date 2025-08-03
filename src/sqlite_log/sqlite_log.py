@@ -181,7 +181,11 @@ class Records:
         cursor.execute(sql, [1, self.max_index, self.term, self.voted_for, self.broken, self.max_commit, self.max_apply])
         self.db.commit()
         cursor.close()
-        return self.read_entry(entry.index)
+        if self.max_commit >= entry.index:
+            entry.committed = True
+        if self.max_apply >= entry.index:
+            entry.applied = True
+        return entry
 
     def read_entry(self, index=None):
         if self.db is None: 

@@ -454,6 +454,11 @@ class LmdbLog(LogAPI):
         save_rec = LogRec.from_dict(entry.__dict__)
         return_rec = self.records.add_entry(save_rec)
         self.logger.debug("new log record %s", return_rec.index)
+        log_rec = LogRec.from_dict(return_rec.__dict__)
+        if return_rec.index <= self.records.max_commit:
+            return_rec.committed = True
+        if return_rec.index <= self.records.max_apply:
+            return_rec.applied = True
         return return_rec
 
     async def replace(self, entry: LogRec) -> LogRec:
@@ -466,7 +471,12 @@ class LmdbLog(LogAPI):
         if save_rec.index > next_index:
             raise Exception("cannot replace record with index greater than max record index")
         self.records.insert_entry(save_rec)
-        return LogRec.from_dict(save_rec.__dict__)
+        log_rec = LogRec.from_dict(save_rec.__dict__)
+        if log_rec.index <= self.records.max_commit:
+            log_rec.committed = True
+        if log_rec.index <= self.records.max_apply:
+            log_rec.applied = True
+        return log_rec
 
     async def read(self, index: Union[int, None] = None) -> Union[LogRec, None]:
         if index is None:
