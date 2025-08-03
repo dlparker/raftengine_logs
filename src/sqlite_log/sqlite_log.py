@@ -15,9 +15,10 @@ def bool_converter(value):
 
 class Records:
 
-    def __init__(self, filepath: os.PathLike):
+    def __init__(self, filepath: os.PathLike, enable_wal=False):
         # log record indexes start at 1, per raftengine spec
         self.filepath = Path(filepath).resolve()
+        self.enable_wal = enable_wal
         self.index = 0
         self.entries = []
         self.db = None
@@ -32,34 +33,33 @@ class Records:
         # at least in testing. Maybe in real server if threading is used.
         # Let it get called when the running server is trying to use it.
 
-    def is_open(self):
-        return self.db is not None
-    
     def open(self) -> None:
         sqlite3.register_converter('BOOLEAN', bool_converter)
-        self.db = sqlite3.connect(self.filepath,
-                                  detect_types=sqlite3.PARSE_DECLTYPES |
-                                  sqlite3.PARSE_COLNAMES)
+        if self.enable_wal:
+            self.db = sqlite3.connect(self.filepath,
+                                      detect_types=sqlite3.PARSE_DECLTYPES |
+                                      sqlite3.PARSE_COLNAMES,
+                                      isolation_level=None)
+            self.db.execute('PRAGMA journal_mode=wal')            
+        else:
+            self.db = sqlite3.connect(self.filepath,
+                                      detect_types=sqlite3.PARSE_DECLTYPES |
+                                      sqlite3.PARSE_COLNAMES)
         self.db.row_factory = sqlite3.Row
         self.ensure_tables()
+        self.max_index = 0
+        self.term = 0
+        self.voted_for = None
+        self.broken = False
+        self.max_commit = 0
+        self.max_apply = 0
         cursor = self.db.cursor()
         sql = "select * from stats"
         cursor.execute(sql)
         row = cursor.fetchone()
         if row:
-            self.max_index = row['max_index']
-            self.term = row['term']
-            self.voted_for = row['voted_for']
-            self.broken = row['broken']
-            self.max_commit = row['max_commit']
-            self.max_apply = row['max_apply']
+            self.refresh_stats()
         else:
-            self.max_index = 0
-            self.term = 0
-            self.voted_for = None
-            self.broken = False
-            self.max_commit = 0
-            self.max_apply = 0
             sql = "replace into stats (dummy, max_index, term, voted_for, broken, max_commit, max_apply)" \
                 " values (?,?,?,?,?,?,?)"
             cursor.execute(sql, [1, 0, 0, None, False, 0, 0])
@@ -68,6 +68,28 @@ class Records:
         row = cursor.fetchone()
         if row:
            self.snapshot = SnapShot(index=row['s_index'], term=row['term'])
+        self.db.commit()
+        cursor.close()
+        
+    def refresh_stats(self):
+        # might be doing multiprocessing and need to reread from disk after
+        # writer process writes
+        cursor = self.db.cursor()
+        sql = "select * from stats"
+        cursor.execute(sql)
+        row = cursor.fetchone()
+        self.max_index = row['max_index']
+        self.term = row['term']
+        self.voted_for = row['voted_for']
+        self.broken = row['broken']
+        self.max_commit = row['max_commit']
+        self.max_apply = row['max_apply']
+        sql = "select * from snapshot where snap_id == 1"
+        cursor.execute(sql)
+        row = cursor.fetchone()
+        if row:
+           self.snapshot = SnapShot(index=row['s_index'], term=row['term'])
+        cursor.close()
         
     def close(self) -> None:
         if self.db is None:  
@@ -358,17 +380,17 @@ class Records:
 
 class SqliteLog(LogAPI):
 
-    def __init__(self, filepath: os.PathLike):
+    def __init__(self, filepath: os.PathLike, enable_wal=False):
         self.records = None
         self.filepath = filepath
         self.logger = logging.getLogger(__name__)
+        self.enable_wal = enable_wal
 
     async def start(self):
         # this indirection helps deal with the need to restrict
         # access to a single thread
-        self.records = Records(self.filepath)
-        if not self.records.is_open(): # pragma: no cover
-            self.records.open() # pragma: no cover
+        self.records = Records(self.filepath, self.enable_wal)
+        self.records.open() 
         
     async def stop(self):
         self.records.close()
@@ -383,8 +405,6 @@ class SqliteLog(LogAPI):
         return self.records.set_fixed()
 
     async def get_term(self) -> Union[int, None]:
-        if not self.records.is_open(): # pragma: no cover
-            self.records.open() # pragma: no cover
         return self.records.term
     
     async def set_term(self, value: int):
@@ -475,8 +495,6 @@ class SqliteLog(LogAPI):
 
     async def get_stats(self) -> LogStats:
         """Get statistics for SqliteLog."""
-        if not self.records.is_open(): # pragma: no cover
-            self.records.open()
         
         cursor = self.records.db.cursor()
         
@@ -522,3 +540,6 @@ class SqliteLog(LogAPI):
             last_record_timestamp=last_record_timestamp
         )
 
+    # not part of API
+    async def refresh_stats(self):
+        self.records.refresh_stats()

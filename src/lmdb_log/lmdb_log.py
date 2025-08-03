@@ -13,10 +13,15 @@ from raftengine.api.types import ClusterConfig, NodeRec, ClusterSettings
 
 class Records:
     """Low-level LMDB operations and transaction management for Raft log storage."""
+
+    default_map_size=10**9 * 10  # 10GB initial map size
     
-    def __init__(self, filepath: os.PathLike):
+    def __init__(self, filepath: os.PathLike, map_size=None):
         # Log record indexes start at 1, per raftengine spec
         self.filepath = Path(filepath).resolve()
+        self.map_size = self.default_map_size
+        if map_size is not None:
+            self.map_size = map_size
         self.env = None
         self.records_db = None      # Sub-DB for log entries
         self.stats_db = None        # Sub-DB for stats and metadata
@@ -46,7 +51,7 @@ class Records:
         # Create LMDB environment with multiple sub-databases
         self.env = lmdb.Environment(
             str(self.filepath),
-            map_size=10**9 * 10,  # 10GB initial map size
+            map_size=self.map_size,
             max_dbs=6,           # 6 named databases
             sync=True,           # Force sync to disk
             writemap=True        # Use writeable memory map
@@ -399,16 +404,17 @@ class Records:
 class LmdbLog(LogAPI):
     """LMDB implementation of the LogAPI interface."""
     
-    def __init__(self, filepath: os.PathLike):
-        self.records = None
+    def __init__(self, filepath: os.PathLike, map_size=None):
         self.filepath = filepath
+        self.map_size = map_size
+        self.records = None
         self.logger = logging.getLogger(__name__)
 
     async def start(self):
         """Initialize the log storage."""
         # This indirection helps deal with the need to restrict
         # access to a single thread
-        self.records = Records(self.filepath)
+        self.records = Records(self.filepath, self.map_size)
         if not self.records.is_open():
             self.records.open()
 

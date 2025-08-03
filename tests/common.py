@@ -237,9 +237,8 @@ async def inner_log_test_snapshots(log_create, log_close_and_reopen):
 
     assert await reopened_log.get_first_index() is None
     assert await reopened_log.get_last_index() == snapshot3.index
-
     
-    await log.stop()
+    await reopened_log.stop()
 
 async def inner_log_test_configs(log_create, log_close_and_reopen):
     
@@ -259,9 +258,11 @@ async def inner_log_test_configs(log_create, log_close_and_reopen):
     cc2 = await log.get_cluster_config()
     assert cc1.settings == cc2.settings
     assert cc1.nodes == cc2.nodes
+    await log.stop()
     
-async def inner_log_perf_run(log_create, loops=1000):
-    
+async def inner_log_perf_run(log_create, loops=10000):
+
+    print(f"starting perf run for {loops} loops")
     log = await log_create()
     await log.start()
 
@@ -313,6 +314,7 @@ async def inner_log_perf_run(log_create, loops=1000):
         times['apply'].append(apply_end-apply_start)
         loop_count += 1
         
+    await log.stop()
     return times
         
 
