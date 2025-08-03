@@ -6,6 +6,7 @@ from typing import Union, List, Optional
 import logging
 from dataclasses import dataclass, asdict
 from multiprocessing import Manager, Process, Queue
+import queue
 import traceback
 from pathlib import Path
 from copy import deepcopy
@@ -39,26 +40,32 @@ class CombiLog(LogAPI):
         self.sqlite_log = SqliteLog(self.sqlite_db_file, enable_wal=True)
         self.lmdb_db_path = Path(dirpath, 'combi_log.lmdb')
         self.lmdb_log = LmdbLog(self.lmdb_db_path, map_size=LMDB_MAP_SIZE)
-        self.pending_writes = []
         self.last_lmdb_snap = None # this will be snapshot to sqlite, not "real" one
         self.sqlwriter = SqliteWriterProc(self, self.sqlite_db_file, self.lmdb_db_path)
         self.push_blocks = {} # indexed by push time
+        self.pending_blocks = []
+        self.pending_writes = []
+        self.running = True
 
     # BEGIN API METHODS
     async def start(self):
         await self.lmdb_log.start()
         await self.sqlite_log.start()
         await self.sqlwriter.start()
+        self.reply_task = asyncio.create_task(self.handle_replies())
 
     async def stop(self):
+        self.running = False
         if self.lmdb_log:
             await self.lmdb_log.stop()
             self.lmdb_log = None
         if self.sqlite_log:
             await self.sqlite_log.stop()
             self.sqlite_log = None
-        await self.sqlwriter.stop()
-
+        if self.sqlwriter:
+            await self.sqlwriter.stop()
+            self.sqlwriter = None
+            
     async def get_broken(self) -> bool:
         return  await self.sqlite_log.get_broken() or await self.lmdb_log.get_broken()
     
@@ -170,22 +177,43 @@ class CombiLog(LogAPI):
                           commit_index = await self.lmdb_log.get_commit_index(),
                           apply_index = await self.lmdb_log.get_applied_index(),
                           pushtime = time.time())
-        last_index = await self.lmdb_log.get_last_index()
-        print(f"block = {block.__dict__}, last_index = {last_index}")
         self.push_blocks[block.pushtime] = block
+        self.pending_blocks.append(block)
         offset = end_index - self.pending_writes[0]
         self.pending_writes = self.pending_writes[offset:]
-        snapshot = await self.sqlwriter.push(block)
-        await self.sqlite_log.refresh_stats()
-        last_index = await self.lmdb_log.get_last_index()
-        first_index = await self.lmdb_log.get_first_index()
-        print(f"before installing sqlite snap {snapshot}, last_index = {last_index}, first_index = {first_index}")
-        await self.lmdb_log.install_snapshot(snapshot)
-        last_index = await self.lmdb_log.get_last_index()
-        first_index = await self.lmdb_log.get_first_index()
-        print(f"after installing sqlite snap {snapshot}, last_index = {last_index}, first_index = {first_index}")
-        self.last_lmdb_snap = snapshot
+        snapshot = await self.sqlwriter.send_push(block)
 
+        # Trim pending_writes optimistically (final trim on completion)
+        offset = end_index - self.pending_writes[0] + 1  # +1 to include end_index
+        self.pending_writes = self.pending_writes[offset:]
+        
+        
+    async def handle_replies(self):
+        while self.running:
+            try:
+                res = await asyncio.to_thread(self.sqlwriter.reply_queue.get_nowait)
+                if res['error'] is not None:
+                    raise Exception(f'Queue returned error {res["error"]}')
+                result = res['result']
+                snap = SnapShot(result['index'], result['term'])
+                block = self.pending_blocks.pop(0)  # FIFO: Process oldest block
+                await self.sqlite_log.refresh_stats()
+                last_index = await self.lmdb_log.get_last_index()
+                first_index = await self.lmdb_log.get_first_index()
+                #print(f"before installing sqlite snap {snap}, last_index = {last_index}, first_index = {first_index}")
+                await self.lmdb_log.install_snapshot(snap)
+                last_index = await self.lmdb_log.get_last_index()
+                first_index = await self.lmdb_log.get_first_index()
+                #print(f"after installing sqlite snap {snap}, last_index = {last_index}, first_index = {first_index}")
+                self.last_lmdb_snap = snap
+                # Final trim: Ensure pending_writes up to block.end_index are removed (in case of races)
+                while self.pending_writes and self.pending_writes[0] <= block.end_index:
+                    self.pending_writes.pop(0)
+            except queue.Empty:
+                await asyncio.sleep(0.0001)  # Poll interval; tune as needed (e.g., 0.05 for less CPU)
+            except Exception as e:
+                traceback.print_exc()
+                logger.error(f"Error processing reply: {e}")
 
 def writer(db_file_path, lmdb_db_path, command_queue, reply_queue):
     
@@ -229,7 +257,7 @@ class BatchWriter:
         try:
             s_last_index = await self.lmdb.get_last_index()
             s_first_index = await self.lmdb.get_first_index()
-            print(f'\nWriter:starting copy {block.start_index}-{block.end_index} li={s_last_index} fi={s_first_index}\n')
+            #print(f'\nWriter:starting copy {block.start_index}-{block.end_index} li={s_last_index} fi={s_first_index}\n')
             for index in range(block.start_index, block.end_index + 1):
                 rec = await self.lmdb.read(index)
                 if rec is None:
@@ -274,17 +302,9 @@ class SqliteWriterProc:
         self.command_queue.put(None)
         self.writer_process.join()
 
-    async def push(self, block):
+    async def send_push(self, block):  # Renamed from push; now non-blocking
         command = dict(command='push_block', block=asdict(block))
         self.command_queue.put(command)
-        res = self.reply_queue.get()
-        if res['error'] is not None:
-            last_i = await self.cmb1.lmdb_log.get_last_index()
-            first_i = await self.cmb1.lmdb_log.get_first_index()
-            raise Exception(f'Queue returned error {res["error"]}  last = {last_i} first = {first_i}')
-        result = res['result']
-        snap = SnapShot(result['index'], result['term'])
-        return snap
         
     
 
