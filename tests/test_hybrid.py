@@ -40,9 +40,8 @@ async def test_hybrid_snapshots():
 
 async def test_hybrid_configs():
     await inner_log_test_configs(log_create, log_close_and_reopen)
-    
-async def test_hybrid_specific():
-    log = await log_create()
+
+async def seq1(log):
     await log.start()
 
     # Want to make sure that records flow to sqlite and
@@ -105,3 +104,23 @@ async def test_hybrid_specific():
 
     finally:
         await log.stop()
+    
+
+async def test_hybrid_specific():
+    log = await log_create()
+    await seq1(log)
+
+    class HL(HybridLog):
+
+        async def start(self):
+            await self.lmdb_log.start()
+            await self.sqlite_log.start()
+            await self.sqlwriter.start(self.handle_snapshot, self.handle_writer_error, inprocess=True)
+    path = Path('/tmp', f"test_log_1")
+    if path.exists():
+        shutil.rmtree(path)
+    path.mkdir()
+    log2 = HL(path, high_limit=1000, low_limit=100)
+
+    await seq1(log2)
+    

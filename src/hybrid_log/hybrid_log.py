@@ -43,7 +43,7 @@ class HybridLog(LogAPI):
         self.lmdb_db_path = Path(dirpath, 'combi_log.lmdb')
         self.lmdb_log = LmdbLog(self.lmdb_db_path, map_size=LMDB_MAP_SIZE)
         self.last_lmdb_snap = None # this will be snapshot to sqlite, not "real" one
-        self.sqlwriter = SqliteWriterControl(self, self.sqlite_db_file, self.lmdb_db_path)
+        self.sqlwriter = SqliteWriterControl(self.sqlite_db_file, self.lmdb_db_path)
         self.push_blocks = {} # indexed by push time
         self.pending_blocks = []
         self.pending_writes = []
