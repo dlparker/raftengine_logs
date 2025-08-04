@@ -427,7 +427,7 @@ class SqliteLog(LogAPI):
     async def append(self, entry: LogRec) -> None:
         save_rec = LogRec.from_dict(entry.__dict__)
         return_rec = self.records.add_entry(save_rec)
-        self.logger.debug("new log record %s", return_rec.index)
+        #self.logger.debug("new log record %s", return_rec.index)
         return return_rec
 
     async def replace(self, entry:LogRec) -> LogRec:

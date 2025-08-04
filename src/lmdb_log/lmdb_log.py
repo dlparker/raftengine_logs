@@ -453,7 +453,7 @@ class LmdbLog(LogAPI):
     async def append(self, entry: LogRec) -> LogRec:
         save_rec = LogRec.from_dict(entry.__dict__)
         return_rec = self.records.add_entry(save_rec)
-        self.logger.debug("new log record %s", return_rec.index)
+        #self.logger.debug("new log record %s", return_rec.index)
         log_rec = LogRec.from_dict(return_rec.__dict__)
         if return_rec.index <= self.records.max_commit:
             return_rec.committed = True

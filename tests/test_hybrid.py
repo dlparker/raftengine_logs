@@ -6,7 +6,6 @@ from pathlib import Path
 import time
 
 import pytest
-
 from raftengine.api.log_api import LogRec
 from raftengine.api.log_api import LogRec
 from hybrid_log.hybrid_log import HybridLog
@@ -14,6 +13,7 @@ from common import (inner_log_test_basic, inner_log_perf_run,
                     inner_log_test_deletes, inner_log_test_snapshots,
                     inner_log_test_configs
                     )
+
 
 async def log_create(instance_number=0):
     path = Path('/tmp', f"test_log_{instance_number}")

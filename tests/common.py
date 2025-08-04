@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 import time
+import logging
 
 import pytest
 
@@ -8,6 +9,8 @@ from raftengine.api.types import ClusterConfig, NodeRec, ClusterSettings
 from raftengine.api.snapshot_api import SnapShot
 
 async def inner_log_test_basic(log_create, log_close_and_reopen):
+    logger = logging.getLogger('test_code')
+    logger.debug(f"staring basic test with log_create")
     log = None
     new_log = None
     
