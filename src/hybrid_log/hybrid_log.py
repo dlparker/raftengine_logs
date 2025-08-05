@@ -34,20 +34,27 @@ class PushBlock:
     
 class HybridLog(LogAPI):
     
-    def __init__(self, dirpath, high_limit=5000, low_limit=100):
+    def __init__(self, dirpath, hold_count=10000, push_snap_size=1000):
         self.dirpath = dirpath 
-        self.low_limit = low_limit # don't go below this so that we don't get confusing boundary conditions
-        self.high_limit = high_limit # time to push to sqlite writer process
+        self.hold_count = hold_count
+        self.last_pressure_sent = 0
+        self.push_trigger = 1000
+        self.push_snap_size = push_snap_size
         self.sqlite_db_file = Path(dirpath, 'combi_log.db')
         self.sqlite_log = SqliteLog(self.sqlite_db_file, enable_wal=True)
         self.lmdb_db_path = Path(dirpath, 'combi_log.lmdb')
         self.lmdb_log = LmdbLog(self.lmdb_db_path, map_size=LMDB_MAP_SIZE)
         self.last_lmdb_snap = None # this will be snapshot to sqlite, not "real" one
-        self.sqlwriter = SqliteWriterControl(self.sqlite_db_file, self.lmdb_db_path)
-        self.push_blocks = {} # indexed by push time
-        self.pending_blocks = []
-        self.pending_writes = []
+        self.sqlwriter = SqliteWriterControl(self.sqlite_db_file, self.lmdb_db_path, snap_size=self.push_snap_size)
+        self.pending_snaps = []
         self.running = True
+
+    def set_hold_count(self, value):
+        self.hold_count = value
+
+    async def set_snap_size(self, value):
+        self.push_snap_size = value
+        await self.sqlwriter.send_snap_size(value)
 
     # BEGIN API METHODS
     async def start(self):
@@ -112,15 +119,29 @@ class HybridLog(LogAPI):
 
     async def get_applied_index(self):
         return await self.lmdb_log.get_applied_index()
-
+        
     async def append(self, record: LogRec) -> None:
         rec = await self.lmdb_log.append(record)
-        self.pending_writes.append(rec.index)
-        if len(self.pending_writes) >= self.high_limit:
-            await self.push_pending()
+        last = await self.lmdb_log.get_last_index()
+        first = await self.lmdb_log.get_first_index()
+        if first is None:
+            first = 0
+        local_count = last - first
+        # The last_pressure_sent value is either is or will become
+        # the first index. So if we have enough records in local
+        # store, taking this into account, to exceed the number
+        # we are supposed to retain, then do a signal to
+        # SqliteWriter. The number to signal is a record index
+        # to be the copy_stop value. That will be the current
+        # last index (from the new record) minus the hold count.
+        current_pressure = local_count - self.last_pressure_sent - self.hold_count
+        if current_pressure >= self.push_trigger:
+            await self.sqlwriter.send_limit(rec.index - self.hold_count,
+                                            await self.lmdb_log.get_commit_index(),
+                                            await self.lmdb_log.get_applied_index())
             await asyncio.sleep(0.0)
         return rec
-        
+
     async def replace(self, entry:LogRec) -> LogRec:
         rec = await self.lmdb_log.replace(entry)
         await self.sqlite_log.replace(rec)
@@ -170,48 +191,19 @@ class HybridLog(LogAPI):
     async def get_stats(self, from_lmdb=False) -> LogStats:
         return await self.lmdb_log.get_stats()
 
-    async def push_pending(self):
-        if len(self.push_blocks) > 0:
-            lasttime = next(reversed(self.push_blocks))
-            lastblock = self.push_blocks[lasttime]
-            next_push_count = self.pending_writes[-1] - lastblock.end_index
-            start_index = lastblock.end_index + 1
-            end_index = start_index + min(next_push_count, PUSH_SIZE)
-        else:
-            start_index = self.pending_writes[0]
-            end_index = self.pending_writes[-1]
-        end_index -= self.low_limit
-        block = PushBlock(start_index, end_index,
-                          commit_index = await self.lmdb_log.get_commit_index(),
-                          apply_index = await self.lmdb_log.get_applied_index(),
-                          pushtime = time.time())
-        self.push_blocks[block.pushtime] = block
-        self.pending_blocks.append(block)
-        offset = end_index - self.pending_writes[0]
-        self.pending_writes = self.pending_writes[offset:]
-        snapshot = await self.sqlwriter.send_push(block)
-
-        # Trim pending_writes optimistically (final trim on completion)
-        offset = end_index - self.pending_writes[0] + 1  # +1 to include end_index
-        self.pending_writes = self.pending_writes[offset:]
-
     async def handle_snapshot(self, snapshot):
         try:
-            block = self.pending_blocks.pop(0)  # FIFO: Process oldest block
             await self.sqlite_log.refresh_stats()
             last_index = await self.lmdb_log.get_last_index()
             first_index = await self.lmdb_log.get_first_index()
             logger.debug(f"before installing sqlite snapshot {snapshot}, " \
-                         "last_index = {last_index}, first_index = {first_index}")
+                         f"lmdb_last_index = {last_index}, lmdb_first_index = {first_index}")
             await self.lmdb_log.install_snapshot(snapshot)
             last_index = await self.lmdb_log.get_last_index()
             first_index = await self.lmdb_log.get_first_index()
             logger.debug(f"after installing sqlite snap {snapshot}, "\
-                         "last_index = {last_index}, first_index = {first_index}")
+                         f"lmdb_last_index = {last_index}, lmdb_first_index = {first_index}")
             self.last_lmdb_snap = snapshot
-            # Final trim: Ensure pending_writes up to block.end_index are removed (in case of races)
-            while self.pending_writes and self.pending_writes[0] <= block.end_index:
-                self.pending_writes.pop(0)
         except:
             logger.error(f"sqlwriter snashot {snapshot} caused error {traceback.format_exc()}")
             await self.stop()

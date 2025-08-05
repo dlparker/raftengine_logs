@@ -20,7 +20,7 @@ async def log_create(instance_number=0):
     if path.exists():
         shutil.rmtree(path)
     path.mkdir()
-    log = HybridLog(path, high_limit=1000, low_limit=100)
+    log = HybridLog(path)
     return log
 
 async def log_close_and_reopen(log):
@@ -44,36 +44,21 @@ async def test_hybrid_configs():
 async def seq1(log):
     await log.start()
 
-    # Want to make sure that records flow to sqlite and
-    # get pruned from lmdb. The hybrid log keeps track
-    # of the record ids that have been written to lmdb
-    # but not to sqlite, and when they reach or exceed
-    # the high_limit parameter it pushes a block of record ids
-    # off to sqlite. It copies those records, and then
-    # sends back a snapshot to the main process, where
-    # it gets installed into the lmdb log. 
-    # So, for each loop, figure out the first record index
-    # that might be tracked. If there is no snapshot, then
-    # it is the first record in the lmdb. If there is a snapshot,
-    # then it is still the first record in the db!
-    # Next, calculate how many records need to be added to 
-    # hit the limit. This will be the number of high_limit +1
-    # passed the last_index value at the start of the loop
     try:
         await log.set_term(1)
-        log.high_limit = 100
-        log.low_limit = 10
+        log.hold_count = 10
+        log.push_trigger = 1
         stats = await log.get_stats()
-        # write one record first to bypass annoying first_index = None problem
-        new_rec = LogRec(command=f"add {1}", serial=1)
-        rec = await log.append(new_rec)
         for loopc in range(10):
+            await log.set_term(loopc+1)
             start_index = await log.get_first_index()
-            threashold_index = start_index + log.high_limit  - 1
+            if start_index is None:
+                start_index = 1
+            threashold_index = start_index + log.hold_count  + 1
             last_at_loop_start = await log.lmdb_log.get_last_index()
             next_index = last_at_loop_start + 1
             while next_index < threashold_index:
-                new_rec = LogRec(command=f"add {next_index}", serial=next_index)
+                new_rec = LogRec(command=f"add {next_index}", serial=next_index, term=loopc)
                 rec = await log.append(new_rec)
                 next_index += 1
             # make sure commit and apply get updated properly in sqlite
@@ -82,21 +67,25 @@ async def seq1(log):
             assert await log.lmdb_log.get_commit_index() == next_index -1
             assert await log.lmdb_log.get_applied_index() == next_index -1
             # now write another to cross threashold
-            new_rec = LogRec(command=f"add {next_index}", serial=next_index)
+            new_rec = LogRec(command=f"add {next_index}", serial=next_index, term=loopc)
             rec = await log.append(new_rec)
             next_index += 1
+            # we won't pick up the snapshot without more records, so
+            # let's cheat and trigger it
             start_time = time.time()
             while time.time() - start_time < 1.0:
                 await asyncio.sleep(0.001)
+                await log.sqlwriter.send_command(dict(command="pop_snap")) 
                 if start_index != await log.get_first_index():
                     break
+                
             assert start_index != await log.get_first_index()
             snap = await log.lmdb_log.get_snapshot()
             assert snap is not None
-            calc = start_index + log.high_limit - log.low_limit
-            if start_index == 1:
-                calc -= 1 # special case for first loop, one record already saved
-            #print(f"{snap.index} == ({start_index} -1 + {log.high_limit} - {log.low_limit}) {calc}")
+            # the snapshot should cover the records from the last snapshot
+            # or the start_index end plus the snapshot size 
+            #
+            calc = start_index + log.push_snap_size - 1 # includes the start index
             assert snap.index == calc
             # make sure commit and apply get updated properly in sqlite
             assert await log.sqlite_log.get_commit_index() == snap.index
@@ -107,20 +96,24 @@ async def seq1(log):
     
 
 async def test_hybrid_specific():
-    log = await log_create()
-    await seq1(log)
-
     class HL(HybridLog):
 
         async def start(self):
             await self.lmdb_log.start()
             await self.sqlite_log.start()
             await self.sqlwriter.start(self.handle_snapshot, self.handle_writer_error, inprocess=True)
-    path = Path('/tmp', f"test_log_1")
+    path = Path('/tmp', f"test_log_1_ip")
     if path.exists():
         shutil.rmtree(path)
     path.mkdir()
-    log2 = HL(path, high_limit=1000, low_limit=100)
+    log1 = HL(path, push_snap_size=2)
+    await seq1(log1)
 
+    path = Path('/tmp', f"test_log_1_mp")
+    if path.exists():
+        shutil.rmtree(path)
+    path.mkdir()
+    log2 = HybridLog(path, push_snap_size=2)
     await seq1(log2)
-    
+
+
