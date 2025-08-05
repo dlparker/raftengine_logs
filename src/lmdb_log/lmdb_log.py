@@ -366,7 +366,9 @@ class Records:
         """Install snapshot and prune old log entries."""
         if self.env is None:
             self.open() # pragma: no cover
-            
+
+        # installing the snapshot in a separate transactions is fine,
+        # when it is done before pruning the records
         with self.env.begin(write=True) as txn:
             # Delete snapshot data first
             cursor = txn.cursor(db=self.snapshots_db) 
@@ -377,22 +379,28 @@ class Records:
             # Save new snapshot
             snapshot_data = {'index': snapshot.index, 'term': snapshot.term}
             txn.put(b'snapshot', json.dumps(snapshot_data).encode('utf-8'), db=self.snapshots_db)
-            
-            # Delete log entries <= snapshot.index
-            cursor = txn.cursor(db=self.records_db)
-            cursor.first()
-            while cursor.key():
-                key_index = int.from_bytes(cursor.key(), 'big')
-                if key_index <= snapshot.index:
-                    has_next = cursor.delete()
-                else:
-                    break
-            
+
             # Update state
             self.max_index = max(snapshot.index, self.max_index)
             self.snapshot = snapshot
+
+        # limit the number of deletes done in one transaction
+        async def delete_100():
+            counter = 0
+            with self.env.begin(write=True) as txn:
+                cursor = txn.cursor(db=self.records_db)
+                cursor.first()
+                while cursor.key() and counter < 100:
+                    key_index = int.from_bytes(cursor.key(), 'big')
+                    if key_index > snapshot.index:
+                        return counter
+                    cursor.delete()
+                    counter += 1
+            return counter
+        
+        while await delete_100() > 0:
+            pass
             
-            self._save_stats(txn)
 
     def get_snapshot(self):
         """Get current snapshot."""
