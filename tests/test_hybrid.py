@@ -108,7 +108,6 @@ async def test_hybrid_specific():
     path.mkdir()
     log1 = HL(path, push_snap_size=2)
     await seq1(log1)
-
     path = Path('/tmp', f"test_log_1_mp")
     if path.exists():
         shutil.rmtree(path)

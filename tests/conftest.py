@@ -63,8 +63,8 @@ def configure_breakpoint():
         extras = [('test_code', ''),
                   ('sqlite_log', ''),
                   ('lmdb_log', ''),
-                  ('hybrid_log', ''),
                   ('hybrid_log.sqlwriter', ''),
+                  ('hybrid_log', ''),
                   ]
 
         try:

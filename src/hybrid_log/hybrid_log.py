@@ -22,23 +22,14 @@ logger = logging.getLogger('hybrid_log')
 
 
 LMDB_MAP_SIZE=10**9 * 2
-PUSH_SIZE=1000
 
-@dataclass
-class PushBlock:
-    start_index: int
-    end_index: int
-    commit_index: int
-    apply_index: int
-    pushtime: float
-    
 class HybridLog(LogAPI):
     
-    def __init__(self, dirpath, hold_count=10000, push_snap_size=1000):
+    def __init__(self, dirpath, hold_count=100000, push_snap_size=500):
         self.dirpath = dirpath 
         self.hold_count = hold_count
         self.last_pressure_sent = 0
-        self.push_trigger = 1000
+        self.push_trigger = 100
         self.push_snap_size = push_snap_size
         self.sqlite_db_file = Path(dirpath, 'combi_log.db')
         self.sqlite_log = SqliteLog(self.sqlite_db_file, enable_wal=True)
@@ -192,21 +183,31 @@ class HybridLog(LogAPI):
         return await self.lmdb_log.get_stats()
 
     async def handle_snapshot(self, snapshot):
-        try:
-            await self.sqlite_log.refresh_stats()
-            last_index = await self.lmdb_log.get_last_index()
-            first_index = await self.lmdb_log.get_first_index()
-            logger.debug(f"before installing sqlite snapshot {snapshot}, " \
-                         f"lmdb_last_index = {last_index}, lmdb_first_index = {first_index}")
-            await self.lmdb_log.install_snapshot(snapshot)
-            last_index = await self.lmdb_log.get_last_index()
-            first_index = await self.lmdb_log.get_first_index()
-            logger.debug(f"after installing sqlite snap {snapshot}, "\
-                         f"lmdb_last_index = {last_index}, lmdb_first_index = {first_index}")
-            self.last_lmdb_snap = snapshot
-        except:
-            logger.error(f"sqlwriter snashot {snapshot} caused error {traceback.format_exc()}")
-            await self.stop()
+        async def process_snapshot(curr_snapshot):
+            try:
+                await self.sqlite_log.refresh_stats()
+                last_index = await self.lmdb_log.get_last_index()
+                first_index = await self.lmdb_log.get_first_index()
+                logger.debug(f"before installing sqlite snapshot {curr_snapshot}, " \
+                             f"lmdb_last_index = {last_index}, lmdb_first_index = {first_index}")
+                await self.lmdb_log.install_snapshot(curr_snapshot)
+                last_index = await self.lmdb_log.get_last_index()
+                first_index = await self.lmdb_log.get_first_index()
+                logger.debug(f"after installing sqlite snap {curr_snapshot}, "\
+                             f"lmdb_last_index = {last_index}, lmdb_first_index = {first_index}")
+                self.last_lmdb_snap = curr_snapshot
+                if self.pending_snaps:
+                    next_snapshot = self.pending_snaps.pop(0)
+                    await asyncio.sleep(0.001)
+                    asyncio.create_task(process_snapshot(next_snapshot))
+            except:
+                logger.error(f"sqlwriter snashot {snapshot} caused error {traceback.format_exc()}")
+                await self.stop()
+        self.pending_snaps.append(snapshot)
+        logger.debug("got sqlitewriter snapshot %s", str(snapshot))
+        next_snapshot = self.pending_snaps.pop(0)
+        asyncio.create_task(process_snapshot(next_snapshot))
+            
 
     async def handle_writer_error(self, error):
         logger.error(f"sqlwriter got error {error}")

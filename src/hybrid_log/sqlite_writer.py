@@ -366,7 +366,6 @@ class SqliteWriter:
         self.snap_size = snap_size
         self.writer_service = SqliteWriterService(self, port=self.port)
         from hybrid_log.hybrid_log import LMDB_MAP_SIZE
-        from hybrid_log.hybrid_log import PUSH_SIZE
         self.sqlite = SqliteLog(self.sqlite_db_path, enable_wal=True)
         self.lmdb = LmdbLog(self.lmdb_db_path, map_size=LMDB_MAP_SIZE)
         self.started = False
