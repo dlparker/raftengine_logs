@@ -106,13 +106,13 @@ async def test_hybrid_specific():
     if path.exists():
         shutil.rmtree(path)
     path.mkdir()
-    log1 = HL(path, push_snap_size=2)
+    log1 = HL(path, push_trigger=5, push_snap_size=2, copy_block_size=2)
     await seq1(log1)
     path = Path('/tmp', f"test_log_1_mp")
     if path.exists():
         shutil.rmtree(path)
     path.mkdir()
-    log2 = HybridLog(path, push_snap_size=2)
+    log2 = HybridLog(path, push_trigger=5, push_snap_size=2, copy_block_size=2)
     await seq1(log2)
 
 

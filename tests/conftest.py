@@ -60,12 +60,7 @@ def configure_breakpoint():
     try:
         from raftengine.deck.log_control import LogController
 
-        extras = [('test_code', ''),
-                  ('sqlite_log', ''),
-                  ('lmdb_log', ''),
-                  ('hybrid_log.sqlwriter', ''),
-                  ('hybrid_log', ''),
-                  ]
+        extras = [('test_code', ''),]
 
         try:
             controller = LogController.get_controller()
@@ -74,6 +69,8 @@ def configure_breakpoint():
             controller = LogController.make_controller(additional_loggers=extras)
         if os.environ.get('RAFTLOG_DEBUG_LOGGING') == '1':
             controller.set_default_level('debug')
+            from pprint import pprint
+            pprint(controller.to_dict_config())
     except ImportError:
         # If LogController is not available, skip debug logging setup
         pass

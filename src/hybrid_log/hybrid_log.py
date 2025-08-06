@@ -1,3 +1,69 @@
+"""
+Theory of ops for using Sqlite as an automatic prune assistant for LMDB primary store by
+using the Sqlite log as an online, live archive of the primary store. These mechanisms
+are the exact, unmodified versions of the Raftengine LogAPI compliant components that
+can be used directly.
+
+Notes:
+1. The purpose of this design is to reduce the chance that you will run out of space for
+   the lmdb records and to do that at a slight performance cost on a fully loaded system.
+2. It is unlikely to have the desired effect if a system is loaded to the maximum possible
+   record generation rate for its entire service life, as the sqlite store will never catch up.
+3. For best results it may need tuning so various dials and knobs are provided.
+
+The incomming records are written to LMDB log immediately. When certain threasholds
+are met the SqliteWriter begins copying record to the sqlite log. The LMDB operations
+take place in the main process, and the SqliteWriter operations take place in a
+child process. Under certain conditions the LMDB side sends a record index as a "limit"
+to the SqliteWriter. The SqliteWriter examines its own records and determines
+the gap between the its own max index and the sent limit and copies the records from LMDB
+log to Sqlite log. It does this by opening a new connection the LMDB log and
+keeps it open for the duration of the copy operation, which is performed in loops where
+the loop opens a transaction, does some ops, then closes the transaction, thus limiting
+the time that it holds a reader lock on the lmdb data. Testing demonstrated that it is
+necessary to close and reopen the LMDB log rather than simply keeping an open connection.
+
+Periodically, the SqlWriter process sends a SnapShot to the main process. This is just
+like a Raftenine SnapShot record, with the index and the term being those of the targeted
+record. This informs the main process that it should install the snapshot, which leads
+to pruning the records from the beginning of the LMDB log up to the snapshot index. 
+The rate of snapshot operations is a tunable parameter meant to ensure that the main process
+does not spend too much time in the record delete operation, which has to be done one at a
+time in LMDB. There is a queue of uninstalled snapshots in memory in the LMDB side
+to avoid missing things on overlap and to provide an opportunity to throttle the delete operations.
+
+When the user code (actually either the Leader or Follower class) requests a read operation
+the HybridLog read code checks to see which log contains the record and routes the request
+there. Most other LogAPI operations are performed by simply calling the LDMB log. There are
+some exceptions. The install_snapshot and get_snapshot calls are seriviced using the sqlite
+log. There is some complexity here when a snapshot index value is in the LMDB log instead
+of sqlite, explained below.
+
+The sqlitewriter makes no adjustments to the rate at which it works, it simply copies records until it
+catches up to the push limit, a number that will keep growing until it has caught up. Catching up will
+only happen if the rate of incomming messages in the lmdb side drops below the maximum rate of the sqlite
+side, plus a bit for extra operations. In my testing in a raft environment a typical ratio of rates is
+lmdb did about 3800 records per second and sqlite did about 2100. 
+
+Communications between the two is by async socket calls so that both sides can handle the comms
+in a fully async fashion. Python multiprocessing is nice to use except for the fact that the
+interprocess communications apis are all synchronous, so using them from async code requires methods
+that waste time an impact performance near full system load.
+
+The timing of these archiving operations are controlled by these parameters:
+
+1. hold_count - This is the number of records that the LDMB log should retain and not
+   send to archive.
+2. push_trigger -  This is combined with the calculate value for "pressure" to decide
+   when to send a new limit message to the SqliteWriter process.
+3. pressure - calculated fron the number of records in LMDB, the hold_count value, and
+   the history of the last value of limit sent to the SqliteWriter
+4. push_snap_size - This is controls the counter used by the SqliteWriter to decide when
+   to send a snapshot to the main process.
+5. copy_block_size - This is controls the number of copy operations that the SqliteWriter
+   copy loop completes within a single transaction.
+
+"""
 import asyncio
 import time
 import sys
@@ -18,25 +84,27 @@ from sqlite_log.sqlite_log import SqliteLog
 from lmdb_log.lmdb_log import LmdbLog
 from hybrid_log.sqlite_writer import SqliteWriterControl
 
-logger = logging.getLogger('hybrid_log')
+logger = logging.getLogger('HybridLog')
 
 
 LMDB_MAP_SIZE=10**9 * 2
 
 class HybridLog(LogAPI):
     
-    def __init__(self, dirpath, hold_count=100000, push_snap_size=500):
+    def __init__(self, dirpath, hold_count=100000, push_trigger=100, push_snap_size=500, copy_block_size=100):
         self.dirpath = dirpath 
         self.hold_count = hold_count
         self.last_pressure_sent = 0
-        self.push_trigger = 100
+        self.push_trigger = push_trigger
         self.push_snap_size = push_snap_size
+        self.copy_block_size = copy_block_size
         self.sqlite_db_file = Path(dirpath, 'combi_log.db')
         self.sqlite_log = SqliteLog(self.sqlite_db_file, enable_wal=True)
         self.lmdb_db_path = Path(dirpath, 'combi_log.lmdb')
         self.lmdb_log = LmdbLog(self.lmdb_db_path, map_size=LMDB_MAP_SIZE)
         self.last_lmdb_snap = None # this will be snapshot to sqlite, not "real" one
-        self.sqlwriter = SqliteWriterControl(self.sqlite_db_file, self.lmdb_db_path, snap_size=self.push_snap_size)
+        self.sqlwriter = SqliteWriterControl(self.sqlite_db_file, self.lmdb_db_path, snap_size=self.push_snap_size,
+                                             copy_block_size=self.copy_block_size)
         self.pending_snaps = []
         self.running = True
 

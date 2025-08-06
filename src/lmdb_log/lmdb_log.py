@@ -417,7 +417,7 @@ class LmdbLog(LogAPI):
         self.filepath = filepath
         self.map_size = map_size
         self.records = None
-        self.logger = logging.getLogger(__name__)
+        self.logger = logging.getLogger('LMDBLog')
 
     async def start(self):
         """Initialize the log storage."""
