@@ -69,8 +69,8 @@ def configure_breakpoint():
             controller = LogController.make_controller(additional_loggers=extras)
         if os.environ.get('RAFTLOG_DEBUG_LOGGING') == '1':
             controller.set_default_level('debug')
-            from pprint import pprint
-            pprint(controller.to_dict_config())
+            #from pprint import pprint
+            #pprint(controller.to_dict_config())
     except ImportError:
         # If LogController is not available, skip debug logging setup
         pass

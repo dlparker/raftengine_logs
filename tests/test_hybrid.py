@@ -46,8 +46,6 @@ async def seq1(log):
 
     try:
         await log.set_term(1)
-        log.hold_count = 10
-        log.push_trigger = 1
         stats = await log.get_stats()
         for loopc in range(10):
             await log.set_term(loopc+1)
@@ -78,6 +76,7 @@ async def seq1(log):
                 await log.sqlwriter.send_command(dict(command="pop_snap")) 
                 if start_index != await log.get_first_index():
                     break
+
                 
             assert start_index != await log.get_first_index()
             snap = await log.lmdb_log.get_snapshot()
@@ -106,13 +105,13 @@ async def test_hybrid_specific():
     if path.exists():
         shutil.rmtree(path)
     path.mkdir()
-    log1 = HL(path, push_trigger=5, push_snap_size=2, copy_block_size=2)
+    log1 = HL(path, hold_count=2, push_trigger=1, push_snap_size=2, copy_block_size=2)
     await seq1(log1)
     path = Path('/tmp', f"test_log_1_mp")
     if path.exists():
         shutil.rmtree(path)
     path.mkdir()
-    log2 = HybridLog(path, push_trigger=5, push_snap_size=2, copy_block_size=2)
+    log2 = HybridLog(path, hold_count=2, push_trigger=1, push_snap_size=2, copy_block_size=2)
     await seq1(log2)
 
 

@@ -17,11 +17,12 @@ take place in the main process, and the SqliteWriter operations take place in a
 child process. Under certain conditions the LMDB side sends a record index as a "limit"
 to the SqliteWriter. The SqliteWriter examines its own records and determines
 the gap between the its own max index and the sent limit and copies the records from LMDB
-log to Sqlite log. It does this by opening a new connection the LMDB log and
-keeps it open for the duration of the copy operation, which is performed in loops where
-the loop opens a transaction, does some ops, then closes the transaction, thus limiting
-the time that it holds a reader lock on the lmdb data. Testing demonstrated that it is
-necessary to close and reopen the LMDB log rather than simply keeping an open connection.
+log to Sqlite log. It does this with as many loops as needed in order to catch up the
+the current limit value, where each loop handles copy_block_size records, max. Each
+pass of the loop opens a closes and reopens the LMDB log connection. Although it
+is technically feasable to rely on transaction control to interleave this with writes
+from the main process, testing has demonstrated that stale reads are common, possibly
+because of some specific aspect of the LMDB log code's management of the LMDB store.
 
 Periodically, the SqlWriter process sends a SnapShot to the main process. This is just
 like a Raftenine SnapShot record, with the index and the term being those of the targeted
@@ -37,7 +38,8 @@ the HybridLog read code checks to see which log contains the record and routes t
 there. Most other LogAPI operations are performed by simply calling the LDMB log. There are
 some exceptions. The install_snapshot and get_snapshot calls are seriviced using the sqlite
 log. There is some complexity here when a snapshot index value is in the LMDB log instead
-of sqlite, explained below.
+of sqlite: it always installs to Sqlite first, then conditionally to LMDB only if the new
+snapshot advances beyond the existing LMDB snapshot. 
 
 The sqlitewriter makes no adjustments to the rate at which it works, it simply copies records until it
 catches up to the push limit, a number that will keep growing until it has caught up. Catching up will
@@ -91,7 +93,7 @@ LMDB_MAP_SIZE=10**9 * 2
 
 class HybridLog(LogAPI):
     
-    def __init__(self, dirpath, hold_count=100000, push_trigger=100, push_snap_size=500, copy_block_size=100):
+    def __init__(self, dirpath, hold_count=100000, push_trigger=50, push_snap_size=100, copy_block_size=50):
         self.dirpath = dirpath 
         self.hold_count = hold_count
         self.last_pressure_sent = 0
@@ -180,6 +182,12 @@ class HybridLog(LogAPI):
         return await self.lmdb_log.get_applied_index()
         
     async def append(self, record: LogRec) -> None:
+        async def relieve_pressure(new_limit):
+            await self.sqlwriter.send_limit(new_limit,
+                                            await self.lmdb_log.get_commit_index(),
+                                            await self.lmdb_log.get_applied_index())
+            self.last_pressure_sent = new_limit
+            logger.debug("Sent limit %d to sqlite_writer, last_pressue now equals new_limit", new_limit)
         rec = await self.lmdb_log.append(record)
         last = await self.lmdb_log.get_last_index()
         first = await self.lmdb_log.get_first_index()
@@ -195,10 +203,9 @@ class HybridLog(LogAPI):
         # last index (from the new record) minus the hold count.
         current_pressure = local_count - self.last_pressure_sent - self.hold_count
         if current_pressure >= self.push_trigger:
-            await self.sqlwriter.send_limit(rec.index - self.hold_count,
-                                            await self.lmdb_log.get_commit_index(),
-                                            await self.lmdb_log.get_applied_index())
-            await asyncio.sleep(0.0)
+            new_limit = rec.index - self.hold_count
+            asyncio.create_task(relieve_pressure(new_limit))
+        await asyncio.sleep(0.0)
         return rec
 
     async def replace(self, entry:LogRec) -> LogRec:
