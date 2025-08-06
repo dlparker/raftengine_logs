@@ -81,9 +81,12 @@ class SqliteWriterControl:
         msg_str = json.dumps(command)
         msg_bytes = msg_str.encode()
         count = str(len(msg_bytes))
-        self.writer.write(f"{count:20s}".encode())
-        self.writer.write(msg_bytes)
-        await self.writer.drain()
+        try:
+            self.writer.write(f"{count:20s}".encode())
+            self.writer.write(msg_bytes)
+            await self.writer.drain()
+        except ConnectionResetError:
+            logger.error(traceback.format_exc())
         
     async def send_limit(self, limit, commit_index, apply_index):  
         command = dict(command='copy_limit', limit=limit, commit_index=commit_index, apply_index=apply_index)
