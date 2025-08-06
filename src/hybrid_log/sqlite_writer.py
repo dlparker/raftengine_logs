@@ -62,7 +62,7 @@ class SqliteWriterControl:
             logger.debug("sqlwriter process started")
         self.running = True
         self.reader, self.writer = await asyncio.open_connection('localhost', self.port)
-        asyncio.create_task(self.get_snaps())
+        asyncio.create_task(self.read_backchannel())
 
     async def stop(self):
         self.running = False
@@ -82,11 +82,14 @@ class SqliteWriterControl:
         msg_bytes = msg_str.encode()
         count = str(len(msg_bytes))
         try:
-            self.writer.write(f"{count:20s}".encode())
-            self.writer.write(msg_bytes)
-            await self.writer.drain()
+            try:
+                self.writer.write(f"{count:20s}".encode())
+                self.writer.write(msg_bytes)
+                await self.writer.drain()
+            except asyncio.CancelledError:
+                pass
         except ConnectionResetError:
-            logger.error(traceback.format_exc())
+            logger.warning(traceback.format_exc())
         
     async def send_limit(self, limit, commit_index, apply_index):  
         command = dict(command='copy_limit', limit=limit, commit_index=commit_index, apply_index=apply_index)
@@ -101,8 +104,8 @@ class SqliteWriterControl:
         command = dict(command='quit')
         await self.send_command(command)
         
-    async def get_snaps(self):
-        logger.debug('get_snaps started')
+    async def read_backchannel(self):
+        logger.debug('read_backchannel started')
         while self.running:
             try:
                 try:
@@ -117,28 +120,30 @@ class SqliteWriterControl:
                         logger.warning("No data received, connection closed")
                         await self.stop()
                         break
-                    # Parse response
-                    response = json.loads(data.decode())
+                    msg_wrapper = json.loads(data.decode())
                     if not self.running:
                         break
-                    if response['error'] is not None:
-                        logger.error(f'reply shows serror {res["error"]}')
-                        await self.stop()
-                        break
-                    result = response['result']
-                    snap = SnapShot(result['index'], result['term'])
-                    logger.debug('\n--------------------\nhandling reply snapshot %s\n----------------------\b', str(snap))
-                    asyncio.create_task(self.callback(snap))
+                    logger.debug("read_backchannel message %s", msg_wrapper)
+                    if msg_wrapper['code'] == "command_error":
+                        logger.error(f'reply shows serror {msg_wrapper["message"]}')
+                    elif msg_wrapper['code'] == "snapshot":
+                        snap = msg_wrapper['message']
+                        snapshot = SnapShot(snap['index'], snap['term'])
+                        logger.debug('\n--------------------\nhandling reply snapshot %s\n----------------------\b', str(snapshot))
+                        asyncio.create_task(self.callback("snapshot", snapshot))
+                    else:
+                        logger.error('\n--------------------\nhandling reply message code unknown %s\n----------------------\b',
+                                     msg_wrapper['code'])
                 except Exception as e:
-                    logger.error('get_snaps got error \n%s', traceback.format_exc())
+                    logger.error('read_backchannel got error \n%s', traceback.format_exc())
                     asyncio.create_task(self.error_callback(traceback.format_exc()))
                     breakpoint()
             except asyncio.CancelledError:
-                logger.warning('get_snaps got cancelled')
+                logger.warning('read_backchannel got cancelled')
                 await self.stop()
                 break
             except ConnectionResetError:
-                logger.warning('get_snaps got dropped socket')
+                logger.warning('read_backchannel got dropped socket')
                 await self.stop()
                 break
         self.running = False
@@ -312,8 +317,8 @@ class SqliteWriterService:
     async def stop(self):
         self.shutdown_event.set()
                 
-    async def send_message(self, message):
-        wrapper = dict(result=message, error=None)
+    async def send_message(self, code, message):
+        wrapper = dict(code=code, message=message)
         msg = json.dumps(wrapper, default=lambda o: o.__dict__)
         msg = msg.encode()
         count = str(len(msg))
@@ -360,13 +365,13 @@ class SqliteWriterService:
                         if self.sqlwriter.pending_snaps:
                             snapshot = self.sqlwriter.pending_snaps.pop(0)
                             logger.debug('sending popped snap %s', str(snapshot))
-                            await self.send_message(snapshot)
+                            await self.send_message(code="snapshot", message=snapshot)
                     elif request['command'] == 'copy_limit':
                         res = await self.sqlwriter.set_copy_limit(request)
                         if res:
                             # this will be a snapshot if anything
                             logger.debug('sending %s', str(res))
-                            await self.send_message(res)
+                            await self.send_message(code="snapshot", message=res)
                     else:
                         # never heard of itn
                         logger.warning(f'Got request of unknown type {request}')

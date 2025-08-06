@@ -121,7 +121,7 @@ class HybridLog(LogAPI):
     async def start(self):
         await self.lmdb_log.start()
         await self.sqlite_log.start()
-        await self.sqlwriter.start(self.handle_snapshot, self.handle_writer_error)
+        await self.sqlwriter.start(self.sqlwriter_callback, self.handle_writer_error)
         
     async def stop(self):
         self.running = False
@@ -257,7 +257,7 @@ class HybridLog(LogAPI):
     async def get_stats(self, from_lmdb=False) -> LogStats:
         return await self.lmdb_log.get_stats()
 
-    async def handle_snapshot(self, snapshot):
+    async def sqlwriter_callback(self, code, data):
         async def process_snapshot(curr_snapshot):
             try:
                 await self.sqlite_log.refresh_stats()
@@ -278,10 +278,11 @@ class HybridLog(LogAPI):
             except:
                 logger.error(f"sqlwriter snashot {snapshot} caused error {traceback.format_exc()}")
                 await self.stop()
-        self.pending_snaps.append(snapshot)
-        logger.debug("got sqlitewriter snapshot %s", str(snapshot))
-        next_snapshot = self.pending_snaps.pop(0)
-        asyncio.create_task(process_snapshot(next_snapshot))
+        if code == "snapshot":
+            self.pending_snaps.append(data)
+            logger.debug("got sqlitewriter snapshot %s", str(data))
+            next_snapshot = self.pending_snaps.pop(0)
+            asyncio.create_task(process_snapshot(next_snapshot))
             
 
     async def handle_writer_error(self, error):
