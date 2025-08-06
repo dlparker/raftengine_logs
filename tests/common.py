@@ -98,7 +98,7 @@ async def inner_log_test_basic(log_create, log_close_and_reopen):
 
     await log.set_voted_for('uri:1')
     await log.set_broken()
-    assert await log.get_broken() 
+    assert await log.get_broken()
     stats = await log.get_stats()
     assert stats.record_count == 3
     assert stats.records_since_snapshot == 3

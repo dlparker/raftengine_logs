@@ -122,3 +122,60 @@ async def test_hybrid_specific():
     await seq1()
 
 
+async def test_enhanced_stats():
+    """Test enhanced hybrid log statistics"""
+    path = Path('/tmp', f"test_enhanced_stats")
+    if path.exists():
+        shutil.rmtree(path)
+    path.mkdir()
+    
+    # Use controlled tuning parameters
+    log = HybridLog(path, hold_count=8, push_trigger=3, push_snap_size=4, copy_block_size=2)
+    await log.start()
+
+    try:
+        await log.set_term(1)
+        
+        # Add records to generate some statistics
+        for i in range(1, 15):
+            new_rec = LogRec(command=f"stats_test {i}", serial=i, term=1)
+            await log.append(new_rec)
+            await log.mark_committed(i)
+            await log.mark_applied(i)
+            await asyncio.sleep(0.05)  # Small delay to allow processing
+        
+        # Wait for writer processing
+        await asyncio.sleep(0.5)
+        
+        # Get enhanced statistics
+        stats = await log.get_hybrid_stats()
+        
+        # Verify we got HybridStats with expected fields
+        assert hasattr(stats, 'lmdb_stats'), "Should have lmdb_stats field"
+        assert hasattr(stats, 'sqlite_stats'), "Should have sqlite_stats field"
+        assert hasattr(stats, 'ingress_rate'), "Should have ingress_rate field"
+        assert hasattr(stats, 'copy_rate'), "Should have copy_rate field"
+        assert hasattr(stats, 'copy_lag'), "Should have copy_lag field"
+        assert hasattr(stats, 'current_pressure'), "Should have current_pressure field"
+        assert hasattr(stats, 'pending_snaps_count'), "Should have pending_snaps_count field"
+        assert hasattr(stats, 'writer_pending_snaps_count'), "Should have writer_pending_snaps_count field"
+        
+        # Basic sanity checks
+        assert stats.lmdb_record_count >= 0, f"LMDB record count should be non-negative: {stats.lmdb_record_count}"
+        assert stats.sqlite_record_count >= 0, f"SQLite record count should be non-negative: {stats.sqlite_record_count}"
+        assert stats.total_hybrid_size_bytes >= 0, f"Total size should be non-negative: {stats.total_hybrid_size_bytes}"
+        assert stats.pending_snaps_count >= 0, f"Pending snaps count should be non-negative: {stats.pending_snaps_count}"
+        
+        print(f"Enhanced stats test - LMDB: {stats.lmdb_record_count}, SQLite: {stats.sqlite_record_count}")
+        print(f"Copy lag: {stats.copy_lag}, Pressure: {stats.current_pressure}")
+        print(f"Total size: {stats.total_hybrid_size_bytes} bytes")
+        
+        # Test that we have meaningful data
+        assert stats.lmdb_record_count > 0, "Should have some LMDB records"
+        
+        print("Enhanced statistics test completed successfully!")
+
+    finally:
+        await log.stop()
+
+

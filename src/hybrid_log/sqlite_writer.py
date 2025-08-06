@@ -131,6 +131,10 @@ class SqliteWriterControl:
                         snapshot = SnapShot(snap['index'], snap['term'])
                         logger.debug('\n--------------------\nhandling reply snapshot %s\n----------------------\b', str(snapshot))
                         asyncio.create_task(self.callback("snapshot", snapshot))
+                    elif msg_wrapper['code'] == "stats":
+                        stats = msg_wrapper['message']
+                        logger.debug('handling reply stats %s', stats)
+                        asyncio.create_task(self.callback("stats", stats))
                     else:
                         logger.error('\n--------------------\nhandling reply message code unknown %s\n----------------------\b',
                                      msg_wrapper['code'])
@@ -169,6 +173,9 @@ class SqliteWriter:
         self.pending_snaps = []
         self.upstream_commit_index = 0
         self.upstream_apply_index = 0
+        # Rate tracking fields for statistics
+        self.copy_block_timestamps = []  # For blocks_per_minute calculation
+        self.copy_blocks_count = 0
 
     async def start(self):
         if not self.started:
@@ -201,6 +208,27 @@ class SqliteWriter:
         if self.pending_snaps:
             return self.pending_snaps.pop(0)
         return None
+    
+    async def get_stats(self) -> dict:
+        """Get writer-side statistics"""
+        import time
+        current_time = time.time()
+        five_minutes_ago = current_time - 300
+        
+        # Clean old timestamps and calculate rate
+        self.copy_block_timestamps = [ts for ts in self.copy_block_timestamps if ts >= five_minutes_ago]
+        copy_blocks_per_minute = len(self.copy_block_timestamps) * 12  # Convert to per-minute
+        
+        sqlite_commit = await self.sqlite.get_commit_index()
+        sqlite_apply = await self.sqlite.get_applied_index()
+        
+        return {
+            'writer_pending_snaps_count': len(self.pending_snaps),
+            'current_copy_limit': self.copy_limit,
+            'upstream_commit_lag': self.upstream_commit_index - sqlite_commit,
+            'upstream_apply_lag': self.upstream_apply_index - sqlite_apply,
+            'copy_blocks_per_minute': copy_blocks_per_minute
+        }
     
     async def copy_task(self):
         try:
@@ -250,6 +278,15 @@ class SqliteWriter:
                     self.pending_snaps.append(snapshot)
                     self.last_snap_index = snap_rec.index
                     logger.debug('appended pending snapshot %s', str(snapshot))
+                
+                # Track copy block rate for statistics
+                import time
+                self.copy_blocks_count += 1
+                self.copy_block_timestamps.append(time.time())
+                # Limit list size for memory efficiency
+                if len(self.copy_block_timestamps) > 1000:
+                    self.copy_block_timestamps = self.copy_block_timestamps[-500:]
+                
                 my_last = await self.sqlite.get_last_index()
         except Exception as e:
             logger.error(traceback.format_exc())
@@ -372,6 +409,9 @@ class SqliteWriterService:
                             # this will be a snapshot if anything
                             logger.debug('sending %s', str(res))
                             await self.send_message(code="snapshot", message=res)
+                    elif request['command'] == 'get_stats':
+                        stats = await self.sqlwriter.get_stats()
+                        await self.send_message(code="stats", message=stats)
                     else:
                         # never heard of itn
                         logger.warning(f'Got request of unknown type {request}')

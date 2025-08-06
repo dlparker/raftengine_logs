@@ -89,6 +89,69 @@ from hybrid_log.sqlite_writer import SqliteWriterControl
 logger = logging.getLogger('HybridLog')
 
 
+@dataclass
+class HybridStats:
+    """Enhanced statistics for hybrid log with data-driven tuning metrics"""
+    # Base stats from LMDB and Sqlite (composed)
+    lmdb_stats: LogStats
+    sqlite_stats: LogStats
+    
+    # Hybrid-specific metrics
+    ingress_rate: float  # LMDB records_per_minute
+    copy_rate: float     # Sqlite records_per_minute during copies
+    copy_lag: int        # LMDB last_index - Sqlite last_index
+    lmdb_record_count: int
+    sqlite_record_count: int
+    pending_snaps_count: int     # len(self.pending_snaps)
+    current_pressure: int        # Calculated pressure value
+    last_limit_sent: int         # self.last_pressure_sent
+    lmdb_percent_remaining: float
+    total_hybrid_size_bytes: int
+    
+    # Writer-side metrics (from SqliteWriter)
+    writer_pending_snaps_count: int
+    current_copy_limit: int
+    upstream_commit_lag: int
+    upstream_apply_lag: int
+    copy_blocks_per_minute: float
+    
+    # Backward compatibility properties
+    @property
+    def record_count(self) -> int:
+        """Backward compatibility: delegate to LMDB record count"""
+        return self.lmdb_stats.record_count
+    
+    @property
+    def records_since_snapshot(self) -> int:
+        """Backward compatibility: delegate to LMDB records since snapshot"""
+        return self.lmdb_stats.records_since_snapshot
+    
+    @property
+    def records_per_minute(self) -> float:
+        """Backward compatibility: delegate to LMDB records per minute"""
+        return self.lmdb_stats.records_per_minute
+    
+    @property
+    def percent_remaining(self) -> float:
+        """Backward compatibility: delegate to LMDB percent remaining"""
+        return self.lmdb_stats.percent_remaining
+    
+    @property
+    def total_size_bytes(self) -> int:
+        """Backward compatibility: delegate to LMDB total size"""
+        return self.lmdb_stats.total_size_bytes
+    
+    @property
+    def snapshot_index(self) -> int:
+        """Backward compatibility: delegate to LMDB snapshot index"""
+        return getattr(self.lmdb_stats, 'snapshot_index', 0)
+    
+    @property
+    def last_record_timestamp(self) -> float:
+        """Backward compatibility: delegate to LMDB last record timestamp"""
+        return getattr(self.lmdb_stats, 'last_record_timestamp', 0.0)
+
+
 LMDB_MAP_SIZE=10**9 * 2
 
 class HybridLog(LogAPI):
@@ -109,6 +172,8 @@ class HybridLog(LogAPI):
                                              copy_block_size=self.copy_block_size)
         self.pending_snaps = []
         self.running = True
+        self.writer_stats = {}  # Storage for writer stats
+        self.stats_request_event = None  # Event for async stats collection
 
     def set_hold_count(self, value):
         self.hold_count = value
@@ -245,7 +310,9 @@ class HybridLog(LogAPI):
             # past the end of the new "real" snapshot,
             # so lmdb does not change
             return
-        await self.lmdb_log.install_snapshot(snapshot)
+        lmdb_first = await self.lmdb_log.get_first_index()
+        if lmdb_first and snapshot.index > lmdb_first:
+            await self.lmdb_log.install_snapshot(snapshot)
         return snapshot
             
     async def get_snapshot(self):
@@ -254,8 +321,105 @@ class HybridLog(LogAPI):
         # instead of "real" snapshots
         return await self.sqlite_log.get_snapshot()
 
-    async def get_stats(self, from_lmdb=False) -> LogStats:
-        return await self.lmdb_log.get_stats()
+    async def _calculate_pressure(self) -> int:
+        """Calculate current pressure value for tuning analysis"""
+        last = await self.lmdb_log.get_last_index()
+        first = await self.lmdb_log.get_first_index()
+        if first is None:
+            first = 0
+        local_count = last - first
+        # Replicate the logic from append() method
+        current_pressure = local_count - self.last_pressure_sent - self.hold_count
+        return current_pressure
+
+    async def get_writer_stats(self) -> dict:
+        """Get stats from writer process via socket"""
+        self.stats_request_event = asyncio.Event()
+        await self.sqlwriter.send_command({'command': 'get_stats'})
+        
+        # Wait for response with timeout
+        try:
+            await asyncio.wait_for(self.stats_request_event.wait(), timeout=2.0)
+            return self.writer_stats.copy()
+        except asyncio.TimeoutError:
+            logger.warning("Timeout waiting for writer stats")
+            return {
+                'writer_pending_snaps_count': 0,
+                'current_copy_limit': 0,
+                'upstream_commit_lag': 0,
+                'upstream_apply_lag': 0,
+                'copy_blocks_per_minute': 0.0
+            }
+        finally:
+            self.stats_request_event = None
+
+    async def get_stats(self) -> LogStats:
+        lmdb_stats = await self.lmdb_log.get_stats()
+        sqlite_stats = await self.sqlite_log.get_stats()
+
+        # figure out how many are in lmdb but not sqlite, this is the overlap
+        lmdb_last = await self.lmdb_log.get_last_index()
+        lmdb_first = await self.lmdb_log.get_first_index()
+        sqlite_last = await self.sqlite_log.get_last_index()
+        sqlite_first = await self.sqlite_log.get_first_index()
+        if sqlite_first is None and lmdb_first is None:
+            record_count = 0
+        elif sqlite_first is None:
+            record_count = lmdb_stats.record_count
+        elif lmdb_first is None:
+            record_count = sqlite_stats.record_count
+        else:
+            record_count = lmdb_last - sqlite_first + 1
+        snap_index =  sqlite_stats.snapshot_index
+        if snap_index is not None:
+            records_since = lmdb_last - snap_index 
+        else:
+            records_since = record_count
+        return LogStats(
+            record_count=record_count, 
+            records_since_snapshot=records_since,
+            records_per_minute=lmdb_stats.records_per_minute,
+            percent_remaining=None,  # SQLite has unlimited storage
+            total_size_bytes=lmdb_stats.total_size_bytes + sqlite_stats.total_size_bytes,
+            snapshot_index=sqlite_stats.snapshot_index,
+            last_record_timestamp=lmdb_stats.last_record_timestamp
+        )
+    
+    async def get_hybrid_stats(self) -> HybridStats:
+        """Get comprehensive hybrid log statistics"""
+        # Get base stats from both logs
+        lmdb_stats = await self.lmdb_log.get_stats()
+        sqlite_stats = await self.sqlite_log.get_stats()
+        
+        # Calculate hybrid-specific metrics
+        lmdb_last = await self.lmdb_log.get_last_index()
+        sqlite_last = await self.sqlite_log.get_last_index()
+        
+        # Get writer stats via socket command
+        writer_stats = await self.get_writer_stats()
+        
+        # Calculate pressure
+        current_pressure = await self._calculate_pressure()
+        
+        return HybridStats(
+            lmdb_stats=lmdb_stats,
+            sqlite_stats=sqlite_stats,
+            ingress_rate=lmdb_stats.records_per_minute,
+            copy_rate=sqlite_stats.records_per_minute,
+            copy_lag=lmdb_last - sqlite_last,
+            lmdb_record_count=lmdb_stats.record_count,
+            sqlite_record_count=sqlite_stats.record_count,
+            pending_snaps_count=len(self.pending_snaps),
+            current_pressure=current_pressure,
+            last_limit_sent=self.last_pressure_sent,
+            lmdb_percent_remaining=lmdb_stats.percent_remaining,
+            total_hybrid_size_bytes=lmdb_stats.total_size_bytes + sqlite_stats.total_size_bytes,
+            writer_pending_snaps_count=writer_stats['writer_pending_snaps_count'],
+            current_copy_limit=writer_stats['current_copy_limit'],
+            upstream_commit_lag=writer_stats['upstream_commit_lag'],
+            upstream_apply_lag=writer_stats['upstream_apply_lag'],
+            copy_blocks_per_minute=writer_stats['copy_blocks_per_minute']
+        )
 
     async def sqlwriter_callback(self, code, data):
         async def process_snapshot(curr_snapshot):
@@ -283,6 +447,11 @@ class HybridLog(LogAPI):
             logger.debug("got sqlitewriter snapshot %s", str(data))
             next_snapshot = self.pending_snaps.pop(0)
             asyncio.create_task(process_snapshot(next_snapshot))
+        elif code == "stats":
+            self.writer_stats = data
+            logger.debug("got sqlitewriter stats %s", data)
+            if self.stats_request_event:
+                self.stats_request_event.set()
             
 
     async def handle_writer_error(self, error):
