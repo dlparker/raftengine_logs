@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from raftengine.api.log_api import LogRec
-from memory.memory_log import MemoryLog
+from memory_log import MemoryLog
 from common import (inner_log_test_basic, inner_log_perf_run,
                     inner_log_test_deletes, inner_log_test_snapshots,
                     inner_log_test_configs
