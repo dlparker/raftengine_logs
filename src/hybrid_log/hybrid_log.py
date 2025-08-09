@@ -362,27 +362,36 @@ class HybridLog(LogAPI):
         lmdb_first = await self.lmdb_log.get_first_index()
         sqlite_last = await self.sqlite_log.get_last_index()
         sqlite_first = await self.sqlite_log.get_first_index()
+        last_index = lmdb_last
         if sqlite_first is None and lmdb_first is None:
             record_count = 0
+            first_index = None
         elif sqlite_first is None:
             record_count = lmdb_stats.record_count
+            first_index = lmdb_first
         elif lmdb_first is None:
             record_count = sqlite_stats.record_count
+            first_index = sqlite_first
         else:
             record_count = lmdb_last - sqlite_first + 1
+            first_index = sqlite_first
         snap_index =  sqlite_stats.snapshot_index
         if snap_index is not None:
             records_since = lmdb_last - snap_index 
         else:
             records_since = record_count
         return LogStats(
+            first_index=first_index,
+            last_index=last_index, 
+            last_term=await self.lmdb_log.get_last_term(),
             record_count=record_count, 
             records_since_snapshot=records_since,
             records_per_minute=lmdb_stats.records_per_minute,
             percent_remaining=None,  # SQLite has unlimited storage
             total_size_bytes=lmdb_stats.total_size_bytes + sqlite_stats.total_size_bytes,
             snapshot_index=sqlite_stats.snapshot_index,
-            last_record_timestamp=lmdb_stats.last_record_timestamp
+            last_record_timestamp=lmdb_stats.last_record_timestamp,
+            extra_stats=await self.get_hybrid_stats()
         )
     
     async def get_hybrid_stats(self) -> HybridStats:

@@ -535,6 +535,9 @@ class SqliteLog(LogAPI):
         cursor.close()
         
         return LogStats(
+            first_index=await self.get_first_index(),
+            last_index=await self.get_last_index(),
+            last_term=await self.get_last_term(),
             record_count=record_count,
             records_since_snapshot=records_since_snapshot,
             records_per_minute=records_per_minute,
