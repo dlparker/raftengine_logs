@@ -1,0 +1,15 @@
+[project]
+name = "raftengine-logs"
+version = "0.5.0"
+requires-python = ">=3.11"
+
+[dependency-groups]
+dev = [
+    "-e file:///${PROJECT_ROOT}/packages/sqlitelog",
+    "-e file:///${PROJECT_ROOT}/packages/memorylog",
+    "-e file:///${PROJECT_ROOT}/packages/lmdblog",
+    "-e file:///${PROJECT_ROOT}/packages/hybridlog",
+]
+
+[tool.pdm]
+# Optional: Add any global settings, e.g., for scripts or plugins

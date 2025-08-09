@@ -1,0 +1,15 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "raftengine-memorylog"
+version = "0.5.0" 
+description = "Memory log companion for raftengine, for testing only"
+authors = [{ name = "Dennis Parker", email = "dlukeparker@windhavengroup.com" }]
+license = { file = "../../LICENSE.md" } 
+requires-python = ">=3.11" 
+dependencies = ["raftengine"]  
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/memory_log"]

@@ -1,0 +1,15 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "raftengine-hybridlog"
+version = "0.5.0" 
+description = "Hybrid log companion for raftengine combining features of LMDB and Sqlite logs"
+authors = [{ name = "Dennis Parker", email = "dlukeparker@windhavengroup.com" }]
+license = { file = "../../LICENSE.md" }  
+requires-python = ">=3.11"  
+dependencies = ["raftengine", "lmdb", "raftengine-lmdblog", "raftengine-sqlitelog"]  
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/hybrid_log"]
