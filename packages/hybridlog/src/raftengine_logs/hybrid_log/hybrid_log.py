@@ -82,8 +82,8 @@ from raftengine.api.log_api import LogRec, LogAPI, LogStats
 from raftengine.api.snapshot_api import SnapShot
 from raftengine.api.types import ClusterConfig, NodeRec, ClusterSettings
 
-from sqlite_log import SqliteLog
-from lmdb_log import LmdbLog
+from raftengine_logs.sqlite_log import SqliteLog
+from raftengine_logs.lmdb_log import LmdbLog
 from .sqlite_writer import SqliteWriterControl
 
 logger = logging.getLogger('HybridLog')

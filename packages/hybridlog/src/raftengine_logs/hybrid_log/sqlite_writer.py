@@ -16,8 +16,8 @@ from raftengine.api.log_api import LogRec, LogAPI, LogStats
 from raftengine.api.snapshot_api import SnapShot
 from raftengine.api.types import ClusterConfig, NodeRec, ClusterSettings
 
-from sqlite_log import SqliteLog
-from lmdb_log import LmdbLog
+from raftengine_logs.sqlite_log import SqliteLog
+from raftengine_logs.lmdb_log import LmdbLog
 
 logger = logging.getLogger('HybridLog.sqlite_writer')
 
@@ -163,7 +163,7 @@ class SqliteWriter:
         self.snap_size = snap_size
         self.copy_block_size = copy_block_size
         self.writer_service = SqliteWriterService(self, port=self.port)
-        from hybrid_log.hybrid_log import LMDB_MAP_SIZE
+        from .hybrid_log import LMDB_MAP_SIZE
         self.sqlite = SqliteLog(self.sqlite_db_path, enable_wal=True)
         self.lmdb = LmdbLog(self.lmdb_db_path, map_size=LMDB_MAP_SIZE)
         self.started = False

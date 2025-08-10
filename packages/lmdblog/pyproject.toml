@@ -1,17 +1,19 @@
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
 [project]
-name = "raftengine-lmdblog"
-version = "0.5.0" 
-description = "LMDB based log companion for raftengine"
+name = "raftengine-logs-lmdb"
+version = "0.5.0"
+requires-python = ">=3.11"
+dependencies = [
+    "raftengine @ git+https://github.com/dlparker/raftengine.git@v0.2.0",
+    "lmdb>=1.7.3",
+]
+description = "LMDB-based log implementation for raftengine"
 authors = [{ name = "Dennis Parker", email = "dlukeparker@windhavengroup.com" }]
-license = { file = "../../LICENSE.md" }  
-requires-python = ">=3.11"  
-dependencies = ["raftengine", "lmdb"]  
+license = "MIT"
 
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
 
-
-[tool.hatch.build.targets.wheel]
-packages = ["src/lmdb_log"]
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["raftengine_logs*"]

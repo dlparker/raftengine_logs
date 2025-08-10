@@ -1,15 +1,18 @@
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
 [project]
-name = "raftengine-memorylog"
-version = "0.5.0" 
-description = "Memory log companion for raftengine, for testing only"
+name = "raftengine-logs-memory"
+version = "0.5.0"
+requires-python = ">=3.11"
+dependencies = [
+    "raftengine @ git+https://github.com/dlparker/raftengine.git@v0.2.0",
+]
+description = "Memory-based log implementation for raftengine"
 authors = [{ name = "Dennis Parker", email = "dlukeparker@windhavengroup.com" }]
-license = { file = "../../LICENSE.md" } 
-requires-python = ">=3.11" 
-dependencies = ["raftengine"]  
+license = "MIT"
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/memory_log"]
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["raftengine_logs*"]

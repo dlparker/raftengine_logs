@@ -1,15 +1,18 @@
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
 [project]
-name = "raftengine-sqlitelog"
-version = "0.5.0" 
-description = "SQLite log companion for raftengine"
+name = "raftengine-logs-sqlite"
+version = "0.5.0"
+requires-python = ">=3.11"
+dependencies = [
+    "raftengine @ git+https://github.com/dlparker/raftengine.git@v0.2.0",
+]
+description = "SQLite-based log implementation for raftengine"
 authors = [{ name = "Dennis Parker", email = "dlukeparker@windhavengroup.com" }]
-license = { file = "../../LICENSE.md" }  
-requires-python = ">=3.11"  
-dependencies = ["raftengine"]  
+license = "MIT"
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/sqlite_log"]
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["raftengine_logs*"]

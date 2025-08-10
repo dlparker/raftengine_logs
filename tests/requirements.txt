@@ -1,6 +1,11 @@
-git+https://github.com/dlparker/raftengine.git@v0.1.0#egg=raftengine
+git+https://github.com/dlparker/raftengine.git@v0.2.0#egg=raftengine
 pytest>=8.4.1
 pytest-asyncio>=1.1.0
 pytest-cov>=6.2.1
 ipdb>=0.13.13
 lmdb>=1.7.3
+-e packages/sqlitelog
+-e packages/memorylog
+-e packages/lmdblog
+-e packages/hybridlog
+

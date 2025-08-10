@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from raftengine.api.log_api import LogRec
-from sqlite_log import SqliteLog
+from raftengine_logs.sqlite_log import SqliteLog
 from common import (inner_log_test_basic, inner_log_perf_run,
                     inner_log_test_deletes, inner_log_test_snapshots,
                     inner_log_test_configs
