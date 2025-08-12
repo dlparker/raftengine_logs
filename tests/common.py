@@ -138,6 +138,9 @@ async def inner_log_test_basic(log_create, log_close_and_reopen):
     assert lrr.applied
     xx = await reopened_log.read(1)
     assert xx.applied
+
+
+    
     
     await reopened_log.stop()
 
@@ -261,6 +264,25 @@ async def inner_log_test_configs(log_create, log_close_and_reopen):
     cc2 = await log.get_cluster_config()
     assert cc1.settings == cc2.settings
     assert cc1.nodes == cc2.nodes
+
+    n4 = NodeRec(uri='uri:4', is_adding=True)
+    cc2.pending_node = n4
+    await log.save_cluster_config(cc2)
+    cc3 = await log.get_cluster_config()
+    assert cc3.pending_node.uri == 'uri:4'
+    assert cc3.pending_node.is_adding 
+    assert not cc3.pending_node.is_removing
+
+    cc3.pending_node = cc3.nodes[n3.uri]
+    del cc3.nodes[n3.uri]
+    cc3.pending_node.is_removing = True
+    await log.save_cluster_config(cc3)
+    cc4 = await log.get_cluster_config()
+    assert cc4.pending_node.uri == 'uri:3'
+    assert not cc4.pending_node.is_adding 
+    assert cc4.pending_node.is_removing
+    assert 'uri:3' not in cc4.nodes
+    
     await log.stop()
     
 async def inner_log_perf_run(log_create, loops=10000):
@@ -316,7 +338,7 @@ async def inner_log_perf_run(log_create, loops=10000):
         times['commit'].append(commit_end-commit_start)
         times['apply'].append(apply_end-apply_start)
         loop_count += 1
-        
+
     await log.stop()
     return times
         

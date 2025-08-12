@@ -290,6 +290,18 @@ class Records:
                        json.dumps(node_data).encode('utf-8'), 
                        db=self.nodes_db)
             
+            # Save pending node if it exists
+            if config.pending_node:
+                node = config.pending_node
+                node_data = {
+                    'uri': node.uri,
+                    'is_adding': node.is_adding,
+                    'is_removing': node.is_removing
+                }
+                txn.put(node.uri.encode('utf-8'), 
+                       json.dumps(node_data).encode('utf-8'), 
+                       db=self.nodes_db)
+            
             # Save settings
             settings_data = {
                 'heartbeat_period': config.settings.heartbeat_period,
@@ -326,8 +338,9 @@ class Records:
                 commands_idempotent=settings_data['commands_idempotent']
             )
             
-            # Load nodes
+            # Load nodes and separate pending from regular nodes
             nodes = {}
+            pending = None
             cursor = txn.cursor(db=self.nodes_db)
             cursor.first()
             for key, value in cursor:
@@ -337,9 +350,12 @@ class Records:
                     is_adding=node_data['is_adding'],
                     is_removing=node_data['is_removing']
                 )
-                nodes[node.uri] = node
+                if node.is_removing or node.is_adding:
+                    pending = node
+                else:
+                    nodes[node.uri] = node
             
-            return ClusterConfig(nodes=nodes, settings=settings)
+            return ClusterConfig(nodes=nodes, settings=settings, pending_node=pending)
 
     def get_first_index(self):
         """Get the index of the first log entry."""

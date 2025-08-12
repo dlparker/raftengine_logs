@@ -3,7 +3,7 @@ name = "raftengine-logs-sqlite"
 version = "0.5.0"
 requires-python = ">=3.11"
 dependencies = [
-    "raftengine @ git+https://github.com/dlparker/raftengine.git@v0.2.0",
+    "raftengine>=0.2.0",
 ]
 description = "SQLite-based log implementation for raftengine"
 authors = [{ name = "Dennis Parker", email = "dlukeparker@windhavengroup.com" }]

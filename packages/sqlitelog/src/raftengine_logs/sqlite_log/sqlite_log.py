@@ -150,16 +150,16 @@ class Records:
         cursor = self.db.cursor()
         params = []
         values = "("
-        if (entry.index is None and self.snapshot
-            and self.snapshot.index == self.max_index):
-            # first insert after snapshot, have to fix index
-            entry.index = self.max_index + 1
-        if entry.index is not None:
+        if entry.index is None or entry.index == 0:
+            if self.max_index is None:
+                entry.index = 1
+            else:
+                entry.index = self.max_index + 1
+            sql = f"insert into records ("
+        else:
             params.append(entry.index)
             sql = f"replace into records (rec_index, "
             values += "?,"
-        else:
-            sql = f"insert into records ("
 
         sql += "code, command, term, serial, leader_id, timestamp) values "
         values += "?,?,?,?,?,?)"
@@ -174,7 +174,6 @@ class Records:
         params.append(entry.leader_id)
         params.append(time.time())  # Add current timestamp
         cursor.execute(sql, params)
-        entry.index = cursor.lastrowid
         if entry.index > self.max_index:
             self.max_index = entry.index
         sql = "replace into stats (dummy, max_index, term, voted_for, broken, max_commit, max_apply) values (?,?,?,?,?,?,?)"
@@ -287,8 +286,6 @@ class Records:
         cursor = self.db.cursor()
         cursor.execute("delete from records where rec_index >= ?", [index,])
         self.max_index = index - 1 if index > 0 else 0
-        # If we are deleting committed records that violates raft rules,
-        # but this is not the place to enforce that
         self.max_commit = min(self.max_index, self.max_commit)
         self.max_apply = min(self.max_index, self.max_apply)
         sql = "replace into stats (dummy, max_index, term, voted_for, broken, max_commit, max_apply)" \
@@ -301,11 +298,20 @@ class Records:
         if self.db is None: # pragma: no cover
             self.open() # pragma: no cover
         cursor = self.db.cursor()
+        sql = "delete from nodes"
+        cursor.execute(sql)
+        sql = "delete from settings"
+        cursor.execute(sql)
         for node in config.nodes.values():
-            sql = "insert or replace into nodes (uri, is_adding, is_removing)"
+            sql = "insert into nodes (uri, is_adding, is_removing)"
             sql += " values (?,?,?)"
             cursor.execute(sql, [node.uri, node.is_adding, node.is_removing])
-        sql = "insert or replace into settings (the_index, heartbeat_period, election_timeout_min,"
+        if config.pending_node:
+            node = config.pending_node
+            sql = "insert into nodes (uri, is_adding, is_removing)"
+            sql += " values (?,?,?)"
+            cursor.execute(sql, [node.uri, node.is_adding, node.is_removing])
+        sql = "insert into settings (the_index, heartbeat_period, election_timeout_min,"
         sql += "election_timeout_max, max_entries_per_message, use_pre_vote, "
         sql += " use_check_quorum, use_dynamic_config, commands_idempotent)"
         sql += " values (?,?,?,?,?,?,?,?,?)"
@@ -315,6 +321,7 @@ class Records:
                              cs.use_dynamic_config, cs.commands_idempotent])
         self.db.commit()
         cursor.close()
+        return config
     
     def get_cluster_config(self) -> Optional[ClusterConfig]:
         if self.db is None: # pragma: no cover
@@ -336,12 +343,16 @@ class Records:
         nodes = {}
         sql = "select * from nodes"
         cursor.execute(sql)
+        pending = None
         for row in cursor.fetchall():
             rec = NodeRec(uri=row['uri'],
                           is_adding=row['is_adding'],
                           is_removing=row['is_removing'])
-            nodes[rec.uri] = rec
-        res = ClusterConfig(nodes=nodes, settings=settings)
+            if rec.is_removing or rec.is_adding:
+                pending = rec
+            if rec is not pending:
+                nodes[rec.uri] = rec
+        res = ClusterConfig(nodes=nodes, settings=settings, pending_node=pending)
         return res
 
     def get_first_index(self):
@@ -391,13 +402,13 @@ class SqliteLog(LogAPI):
         self.enable_wal = enable_wal
 
     async def start(self):
-        # this indirection helps deal with the need to restrict
-        # access to a single thread
-        self.records = Records(self.filepath, self.enable_wal)
-        self.records.open() 
+        if not self.records:
+            self.records = Records(self.filepath, self.enable_wal)
+            self.records.open() 
         
     async def stop(self):
-        self.records.close()
+        if self.records:
+            self.records.close()
         
     async def get_broken(self):
         return self.records.get_broken()
@@ -426,7 +437,7 @@ class SqliteLog(LogAPI):
 
     async def append(self, entry: LogRec) -> None:
         save_rec = LogRec.from_dict(entry.__dict__)
-        return_rec = self.records.add_entry(save_rec)
+        return_rec = self.records.save_entry(save_rec)
         #self.logger.debug("new log record %s", return_rec.index)
         return return_rec
 
