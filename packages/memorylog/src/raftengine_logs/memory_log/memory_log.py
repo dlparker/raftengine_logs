@@ -211,11 +211,16 @@ class MemoryLog(LogAPI):
                     del self.entries[rindex]
             keys = list(self.entries.keys())
             keys.sort()
-            self.first_index = keys[0]
-            self.last_index = keys[-1]
-            rec = self.entries[self.last_index]
-            self.last_term = rec.term
-
+            if len(keys):
+                self.first_index = keys[0]
+                self.last_index = keys[-1]
+                rec = self.entries[self.last_index]
+                self.last_term = rec.term
+            else:
+                self.first_index = None
+                self.last_index = 0
+                self.term = 0
+                
     async def save_cluster_config(self, config: ClusterConfig) -> None:
         self.nodes = deepcopy(config.nodes)
         self.pending_node = deepcopy(config.pending_node)

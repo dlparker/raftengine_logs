@@ -260,8 +260,10 @@ async def inner_log_test_configs(log_create, log_close_and_reopen):
     n3 = NodeRec(uri='uri:3')
     nodes[n3.uri] = n3
     cc1 = ClusterConfig(nodes=nodes, settings=settings)
-    await log.save_cluster_config(cc1)
+    cp1 = await log.save_cluster_config(cc1)
     cc2 = await log.get_cluster_config()
+    assert cc1.settings == cp1.settings
+    assert cc1.nodes == cp1.nodes
     assert cc1.settings == cc2.settings
     assert cc1.nodes == cc2.nodes
 

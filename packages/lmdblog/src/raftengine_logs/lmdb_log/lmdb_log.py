@@ -314,7 +314,8 @@ class Records:
                 'commands_idempotent': config.settings.commands_idempotent
             }
             txn.put(b'settings', json.dumps(settings_data).encode('utf-8'), db=self.settings_db)
-
+            return config
+        
     def get_cluster_config(self) -> Optional[ClusterConfig]:
         """Retrieve cluster configuration from database."""
         if self.env is None:
