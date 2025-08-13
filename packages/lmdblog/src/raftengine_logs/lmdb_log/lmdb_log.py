@@ -135,19 +135,12 @@ class Records:
             
         with self.env.begin(write=True) as txn:
             # Handle index assignment like SQLite implementation
-            if (entry.index is None and self.snapshot 
-                and self.snapshot.index == self.max_index):
-                # First insert after snapshot, have to fix index
-                entry.index = self.max_index + 1
-                
-            if entry.index is not None:
-                # Replace existing entry
-                key = entry.index.to_bytes(8, 'big')
-            else:
-                # Auto-assign next index
-                entry.index = self.max_index + 1
-                key = entry.index.to_bytes(8, 'big')
-            
+            if (entry.index is None or entry.index == 0):
+                if self.max_index is None:
+                    entry.index = 0
+                else:
+                    entry.index = self.max_index + 1
+            key = entry.index.to_bytes(8, 'big')
             value = self._serialize_rec(entry)
             txn.put(key, value, db=self.records_db)
             
@@ -155,9 +148,7 @@ class Records:
             timestamp_value = str(time.time()).encode('utf-8')
             txn.put(key, timestamp_value, db=self.timestamps_db)
             
-            # Update tracking state
-            if entry.index > self.max_index:
-                self.max_index = entry.index
+            self.max_index = max(entry.index, self.max_index)
             self._save_stats(txn)
             
         return self.read_entry(entry.index)
@@ -222,13 +213,6 @@ class Records:
         if index < 1:
             return None
         return self.read_entry(index)
-
-    def add_entry(self, rec: LogRec) -> LogRec:
-        """Add new entry (append)."""
-        orig_index = rec.index
-        rec.index = None  # Force auto-assignment
-        rec = self.save_entry(rec)
-        return rec
 
     def insert_entry(self, rec: LogRec) -> LogRec:
         """Insert entry at specific index (replace)."""
@@ -478,7 +462,7 @@ class LmdbLog(LogAPI):
 
     async def append(self, entry: LogRec) -> LogRec:
         save_rec = LogRec.from_dict(entry.__dict__)
-        return_rec = self.records.add_entry(save_rec)
+        return_rec = self.records.insert_entry(save_rec)
         #self.logger.debug("new log record %s", return_rec.index)
         log_rec = LogRec.from_dict(return_rec.__dict__)
         if return_rec.index <= self.records.max_commit:

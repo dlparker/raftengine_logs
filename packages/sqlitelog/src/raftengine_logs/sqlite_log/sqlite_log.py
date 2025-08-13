@@ -256,12 +256,6 @@ class Records:
             return None
         return self.read_entry(index)
 
-    def add_entry(self, rec: LogRec) -> LogRec:
-        orig_index = rec.index
-        rec.index = None
-        rec = self.save_entry(rec)
-        return rec
-
     def insert_entry(self, rec: LogRec) -> LogRec:
         rec = self.save_entry(rec)
         return rec

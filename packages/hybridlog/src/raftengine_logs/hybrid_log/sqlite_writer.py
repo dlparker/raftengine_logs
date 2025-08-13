@@ -68,6 +68,7 @@ class SqliteWriterControl:
         self.running = False
         if self.writer:
             await self.send_quit()
+            await asyncio.sleep(0.001)
         if self.writer_proc:
             self.writer_proc.join()
             self.writer_proc = None
@@ -76,18 +77,19 @@ class SqliteWriterControl:
                 self.writer_task.cancel()
             except asyncio.CancelledError:
                 pass
+            except ConnectionResetError:
+                pass
 
     async def send_command(self, command):
         msg_str = json.dumps(command)
         msg_bytes = msg_str.encode()
         count = str(len(msg_bytes))
         try:
-            try:
-                self.writer.write(f"{count:20s}".encode())
-                self.writer.write(msg_bytes)
-                await self.writer.drain()
-            except asyncio.CancelledError:
-                pass
+            self.writer.write(f"{count:20s}".encode())
+            self.writer.write(msg_bytes)
+            await self.writer.drain()
+        except asyncio.CancelledError:
+            pass
         except ConnectionResetError:
             logger.warning(traceback.format_exc())
         
@@ -112,19 +114,21 @@ class SqliteWriterControl:
                     len_data = await self.reader.read(20)
                     if not len_data:
                         logger.warning("Connection closed by server")
-                        await self.stop()
                         break
                     msg_len = int(len_data.decode().strip())
                     data = await self.reader.read(msg_len)
                     if not data:
                         logger.warning("No data received, connection closed")
-                        await self.stop()
                         break
                     msg_wrapper = json.loads(data.decode())
                     if not self.running:
                         break
                     logger.debug("read_backchannel message %s", msg_wrapper)
-                    if msg_wrapper['code'] == "command_error":
+                    if msg_wrapper['code'] == "quitting":
+                        logger.warning(f'writer process sent quitting signal, shutting down')
+                        self.running = False
+                        break
+                    elif msg_wrapper['code'] == "command_error":
                         logger.error(f'reply shows serror {msg_wrapper["message"]}')
                     elif msg_wrapper['code'] == "snapshot":
                         snap = msg_wrapper['message']
@@ -141,7 +145,6 @@ class SqliteWriterControl:
                 except Exception as e:
                     logger.error('read_backchannel got error \n%s', traceback.format_exc())
                     asyncio.create_task(self.error_callback(traceback.format_exc()))
-                    breakpoint()
             except asyncio.CancelledError:
                 logger.warning('read_backchannel got cancelled')
                 await self.stop()
@@ -393,6 +396,8 @@ class SqliteWriterService:
                     #logger.debug("SqliteWriterService got request %s", request)
                     if request['command'] == 'quit':
                         logger.info("quitting on command")
+                        await self.send_message(code="quitting", message="")
+                        await asyncio.sleep(0.1)
                         break
                     elif request['command'] == 'snap_size':
                         await self.sqlwriter.set_snap_size(request['size'])

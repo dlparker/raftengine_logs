@@ -163,9 +163,9 @@ class HybridLog(LogAPI):
         self.push_trigger = push_trigger
         self.push_snap_size = push_snap_size
         self.copy_block_size = copy_block_size
-        self.sqlite_db_file = Path(dirpath, 'combi_log.db')
+        self.sqlite_db_file = Path(dirpath, 'hybrid_log.db')
         self.sqlite_log = SqliteLog(self.sqlite_db_file, enable_wal=True)
-        self.lmdb_db_path = Path(dirpath, 'combi_log.lmdb')
+        self.lmdb_db_path = Path(dirpath, 'hybrid_log.lmdb')
         self.lmdb_log = LmdbLog(self.lmdb_db_path, map_size=LMDB_MAP_SIZE)
         self.last_lmdb_snap = None # this will be snapshot to sqlite, not "real" one
         self.sqlwriter = SqliteWriterControl(self.sqlite_db_file, self.lmdb_db_path, snap_size=self.push_snap_size,
@@ -254,6 +254,8 @@ class HybridLog(LogAPI):
             self.last_pressure_sent = new_limit
             logger.debug("Sent limit %d to sqlite_writer, last_pressue now equals new_limit", new_limit)
         rec = await self.lmdb_log.append(record)
+        if record.index and record.index != rec.index:
+            print(f'\n\nRequested index == {record.index} but got {rec.index}\n\n')
         last = await self.lmdb_log.get_last_index()
         first = await self.lmdb_log.get_first_index()
         if first is None:
