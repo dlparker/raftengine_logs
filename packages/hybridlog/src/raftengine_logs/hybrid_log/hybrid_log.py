@@ -316,7 +316,11 @@ class HybridLog(LogAPI):
             # so lmdb does not change
             return
         lmdb_first = await self.lmdb_log.get_first_index()
-        if lmdb_first and snapshot.index > lmdb_first:
+        lmdb_last = await self.lmdb_log.get_last_index()
+        if lmdb_first is None and lmdb_last == 0:
+            # empty log, install in lmdb too
+            await self.lmdb_log.install_snapshot(snapshot)
+        elif lmdb_first and snapshot.index > lmdb_first:
             await self.lmdb_log.install_snapshot(snapshot)
         return snapshot
             
