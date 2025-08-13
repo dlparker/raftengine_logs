@@ -276,7 +276,10 @@ class HybridLog(LogAPI):
         return rec
 
     async def replace(self, entry:LogRec) -> LogRec:
-        rec = await self.lmdb_log.replace(entry)
+        lmdb_first = await self.lmdb_log.get_first_index()
+        if lmdb_first and entry.index > lmdb_first:
+            rec = await self.lmdb_log.replace(entry)
+            return rec
         await self.sqlite_log.replace(rec)
         return rec
 
