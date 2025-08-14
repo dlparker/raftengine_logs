@@ -29,6 +29,7 @@ class Records:
         self.max_commit = None
         self.max_apply = None
         self.snapshot = None
+        self.uri = None
         # Don't call open from here, we may be in the wrong thread,
         # at least in testing. Maybe in real server if threading is used.
         # Let it get called when the running server is trying to use it.
@@ -53,6 +54,7 @@ class Records:
         self.broken = False
         self.max_commit = 0
         self.max_apply = 0
+        self.uri = None
         cursor = self.db.cursor()
         sql = "select * from stats"
         cursor.execute(sql)
@@ -60,9 +62,9 @@ class Records:
         if row:
             self.refresh_stats()
         else:
-            sql = "replace into stats (dummy, max_index, term, voted_for, broken, max_commit, max_apply)" \
-                " values (?,?,?,?,?,?,?)"
-            cursor.execute(sql, [1, 0, 0, None, False, 0, 0])
+            sql = "replace into stats (dummy, max_index, term, voted_for, broken, max_commit, max_apply, uri)" \
+                " values (?,?,?,?,?,?,?,?)"
+            cursor.execute(sql, [1, 0, 0, None, False, 0, 0, None])
         sql = "select * from snapshot where snap_id == 1"
         cursor.execute(sql)
         row = cursor.fetchone()
@@ -84,6 +86,7 @@ class Records:
         self.broken = row['broken']
         self.max_commit = row['max_commit']
         self.max_apply = row['max_apply']
+        self.uri = row['uri']
         sql = "select * from snapshot where snap_id == 1"
         cursor.execute(sql)
         row = cursor.fetchone()
@@ -115,7 +118,8 @@ class Records:
             " voted_for TEXT, "\
             " max_commit INTEGER," \
             " max_apply INTEGER," \
-            " broken BOOLEAN)"
+            " broken BOOLEAN," \
+            " uri TEXT)"
         cursor.execute(schema)
 
         schema =  "CREATE TABLE if not exists nodes " 
@@ -176,8 +180,10 @@ class Records:
         cursor.execute(sql, params)
         if entry.index > self.max_index:
             self.max_index = entry.index
-        sql = "replace into stats (dummy, max_index, term, voted_for, broken, max_commit, max_apply) values (?,?,?,?,?,?,?)"
-        cursor.execute(sql, [1, self.max_index, self.term, self.voted_for, self.broken, self.max_commit, self.max_apply])
+        sql = "replace into stats (dummy, max_index, term, voted_for, broken, max_commit, max_apply, uri) "
+        sql += "values (?,?,?,?,?,?,?,?)"
+        cursor.execute(sql, [1, self.max_index, self.term, self.voted_for,
+                             self.broken, self.max_commit, self.max_apply, self.uri])
         self.db.commit()
         cursor.close()
         if self.max_commit >= entry.index:
@@ -235,14 +241,19 @@ class Records:
         if self.db is None: # pragma: no cover
             self.open() # pragma: no cover
         cursor = self.db.cursor()
-        sql = "replace into stats (dummy, max_index, term, voted_for, broken, max_commit, max_apply)" \
-            " values (?,?,?,?,?,?,?)"
-        cursor.execute(sql, [1, self.max_index, self.term, self.voted_for, self.broken, self.max_commit, self.max_apply])
+        sql = "replace into stats (dummy, max_index, term, voted_for, broken, max_commit, "\
+            " max_apply, uri) values (?,?,?,?,?,?,?,?)"
+        cursor.execute(sql, [1, self.max_index, self.term, self.voted_for, self.broken,
+                             self.max_commit, self.max_apply, self.uri])
         self.db.commit()
         cursor.close()
     
     def set_term(self, value):
         self.term = value
+        self.save_stats()
+    
+    def set_uri(self, uri):
+        self.uri = uri
         self.save_stats()
     
     def set_voted_for(self, value):
@@ -282,9 +293,10 @@ class Records:
         self.max_index = index - 1 if index > 0 else 0
         self.max_commit = min(self.max_index, self.max_commit)
         self.max_apply = min(self.max_index, self.max_apply)
-        sql = "replace into stats (dummy, max_index, term, voted_for, broken, max_commit, max_apply)" \
-            " values (?,?,?,?,?,?,?)"
-        cursor.execute(sql, [1, self.max_index, self.term, self.voted_for, self.broken, self.max_commit, self.max_apply])
+        sql = "replace into stats (dummy, max_index, term, voted_for, broken, max_commit, max_apply, uri)" \
+            " values (?,?,?,?,?,?,?,?)"
+        cursor.execute(sql, [1, self.max_index, self.term, self.voted_for, self.broken, self.max_commit,
+                             self.max_apply, self.uri])
         self.db.commit()
         cursor.close()
     
@@ -412,6 +424,12 @@ class SqliteLog(LogAPI):
 
     async def set_fixed(self):
         return self.records.set_fixed()
+
+    async def get_uri(self) -> Union[str, None]:
+        return self.records.uri
+    
+    async def set_uri(self, uri: int):
+        self.records.set_uri(uri)
 
     async def get_term(self) -> Union[int, None]:
         return self.records.term

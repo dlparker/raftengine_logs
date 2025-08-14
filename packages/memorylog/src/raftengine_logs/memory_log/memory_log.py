@@ -28,6 +28,7 @@ class MemoryLog(LogAPI):
         self.max_commit = 0
         self.max_apply = 0
         self.max_timestamps = 1000
+        self.uri = None
         
         # Statistics tracking
         self.record_timestamps = []  # Track timestamps for rate calculation
@@ -118,6 +119,12 @@ class MemoryLog(LogAPI):
     async def set_fixed(self) -> None:
         self.broken = False
     
+    async def get_uri(self) -> Union[str, None]:
+        return self.uri
+    
+    async def set_uri(self, uri: str):
+        self.uri = uri
+
     async def get_term(self) -> Union[int, None]:
         return self.term
     

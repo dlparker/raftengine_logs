@@ -187,6 +187,7 @@ class HybridLog(LogAPI):
         await self.lmdb_log.start()
         await self.sqlite_log.start()
         await self.sqlwriter.start(self.sqlwriter_callback, self.handle_writer_error)
+        self.running = True
         
     async def stop(self):
         self.running = False
@@ -210,6 +211,12 @@ class HybridLog(LogAPI):
     async def set_fixed(self) -> None:
         await self.sqlite_log.set_fixed()
         return await self.lmdb_log.set_fixed()
+
+    async def get_uri(self) -> Union[str, None]:
+        return await self.lmdb_log.get_uri()
+    
+    async def set_uri(self, uri: str):
+        await self.lmdb_log.set_uri(uri)
 
     async def get_term(self) -> Union[int, None]:
         return await self.lmdb_log.get_term()

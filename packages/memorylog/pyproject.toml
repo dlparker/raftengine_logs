@@ -1,6 +1,6 @@
 [project]
 name = "raftengine-logs-memory"
-version = "0.5.1"
+version = "0.5.2"
 requires-python = ">=3.11"
 dependencies = [
     "raftengine>=0.2.0",

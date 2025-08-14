@@ -1,4 +1,4 @@
-git+https://github.com/dlparker/raftengine.git@v0.2.0#egg=raftengine
+raftengine>=0.5.0
 pytest>=8.4.1
 pytest-asyncio>=1.1.0
 pytest-cov>=6.2.1

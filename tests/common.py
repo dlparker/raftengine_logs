@@ -17,6 +17,8 @@ async def inner_log_test_basic(log_create, log_close_and_reopen):
     log = await log_create()
     await log.start()
 
+    await log.set_uri("foo")
+    assert await log.get_uri() == "foo"
     assert await log.get_last_index() == 0
     assert await log.get_first_index() is None
     assert await log.get_last_term() == 0

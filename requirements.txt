@@ -1,2 +1,2 @@
-+pdm==2.25.5
-+hatchling==1.27.0
+pdm==2.25.5
+hatchling==1.27.0

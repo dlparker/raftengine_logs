@@ -38,6 +38,7 @@ class Records:
         self.broken = False
         self.max_commit = 0
         self.max_apply = 0
+        self.uri = None
         self.snapshot = None
         
         # Don't call open from here, we may be in the wrong thread,
@@ -78,6 +79,7 @@ class Records:
                 self.broken = stats['broken']
                 self.max_commit = stats['max_commit']
                 self.max_apply = stats['max_apply']
+                self.uri = stats['uri']
             else:
                 # Initialize with defaults
                 self.max_index = 0
@@ -86,6 +88,7 @@ class Records:
                 self.broken = False
                 self.max_commit = 0
                 self.max_apply = 0
+                self.uri = None
                 with self.env.begin(write=True) as write_txn:
                     self._save_stats(write_txn)
             
@@ -124,7 +127,8 @@ class Records:
             'voted_for': self.voted_for,
             'broken': self.broken,
             'max_commit': self.max_commit,
-            'max_apply': self.max_apply
+            'max_apply': self.max_apply,
+            'uri': self.uri
         }
         txn.put(b'stats', json.dumps(stats).encode('utf-8'), db=self.stats_db)
 
@@ -201,6 +205,10 @@ class Records:
 
     def set_term(self, value):
         self.term = value
+        self.save_stats()
+
+    def set_uri(self, uri):
+        self.uri = uri
         self.save_stats()
 
     def set_voted_for(self, value):
@@ -442,6 +450,14 @@ class LmdbLog(LogAPI):
     async def set_fixed(self):
         return self.records.set_fixed()
 
+    async def get_uri(self) -> Union[str, None]:
+        if not self.records.is_open():
+            self.records.open() # pragma: no cover
+        return self.records.uri
+    
+    async def set_uri(self, uri: int):
+        self.records.set_uri(uri)
+        
     async def get_term(self) -> Union[int, None]:
         if not self.records.is_open():
             self.records.open() # pragma: no cover
